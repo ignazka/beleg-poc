@@ -4,12 +4,36 @@ import time
 
 import streamlit as st
 
+from auth import aktueller_benutzer, login_erzwingen
 from beleg_schema import FEEDBACK_FELDER, KATEGORIEN, anzeige, normalisieren, werte_gleich
+from datenschutz import ist_datenschutzseite, zeige_datenschutz
 from extraction import MAX_PDF_SEITEN, MODEL, AnalyseFehler, analysieren, datei_zu_bildern
 from prompts import PROMPT_VERSION
-from storage import beleg_speichern, datei_hash, feedback_laden, feedback_speichern, schon_bewertet
+from storage import (
+    AblageFehler,
+    ablage_beschreibung,
+    ablage_pruefen,
+    beleg_speichern,
+    datei_hash,
+    feedback_laden,
+    feedback_speichern,
+    schon_bewertet,
+)
 
 st.set_page_config(page_title="Beleg-Klassifizierung PoC", layout="wide")
+
+if ist_datenschutzseite():  # öffentlich, ohne Login (von Google für den OAuth-Produktionsmodus verlangt)
+    zeige_datenschutz()
+    st.stop()
+
+login_erzwingen()
+
+try:
+    ablage_pruefen()  # Drive falsch konfiguriert -> sofort sperren statt Daten zu verlieren
+except AblageFehler as e:
+    st.error(f"Ablage nicht verfügbar: {e}")
+    st.stop()
+st.sidebar.caption(f"Ablage: {ablage_beschreibung()}")
 
 
 def _kategorie_label(key):
@@ -117,7 +141,11 @@ def zeige_feedback(erg):
     if st.session_state.get("gespeichert"):
         st.success("Feedback gespeichert – danke! Du kannst den nächsten Beleg hochladen.")
         return
-    if schon_bewertet(erg["sha"]):
+    try:
+        bereits_bewertet = schon_bewertet(erg["sha"])
+    except Exception:  # Ablage kurz nicht erreichbar -> Hinweis weglassen, Speichern meldet den Fehler
+        bereits_bewertet = False
+    if bereits_bewertet:
         st.info("Dieser Beleg wurde schon einmal bewertet. Ein neues Feedback wird zusätzlich gespeichert.")
 
     st.caption(
@@ -151,7 +179,9 @@ def zeige_feedback(erg):
         kommentar = st.text_area(
             "Kommentar (optional)", placeholder="z. B. Trinkgeld stand handschriftlich auf dem Beleg"
         )
-        bearbeiter = st.text_input("Dein Kürzel", value=st.session_state.get("bearbeiter", ""))
+        bearbeiter = st.text_input(
+            "Dein Kürzel", value=st.session_state.get("bearbeiter") or aktueller_benutzer() or ""
+        )
         abgeschickt = st.form_submit_button("Feedback speichern", type="primary")
 
     if not abgeschickt:
@@ -177,7 +207,17 @@ def zeige_feedback(erg):
         return
 
     st.session_state["bearbeiter"] = bearbeiter
-    pfad = beleg_speichern(erg["file_bytes"], erg["dateiname"], erg["sha"])
+    try:
+        pfad = beleg_speichern(erg["file_bytes"], erg["dateiname"], erg["sha"])
+        _feedback_ablegen(erg, analyse, kat_korrekt, felder, hinweise_ok, kommentar, bearbeiter, pfad)
+    except Exception as e:  # z. B. Drive nicht erreichbar, Ordner nicht beschreibbar
+        st.error(f"Speichern fehlgeschlagen – bitte erneut versuchen: {e}")
+        return
+    st.session_state["gespeichert"] = True
+    st.rerun()
+
+
+def _feedback_ablegen(erg, analyse, kat_korrekt, felder, hinweise_ok, kommentar, bearbeiter, pfad):
     feedback_speichern({
         "datei_sha256": erg["sha"],
         "dateiname": erg["dateiname"],
@@ -197,9 +237,8 @@ def zeige_feedback(erg):
         "hinweise_zutreffend": hinweise_ok,
         "kommentar": kommentar.strip() or None,
         "bearbeiter": bearbeiter.strip() or None,
+        "benutzer_email": aktueller_benutzer(),
     })
-    st.session_state["gespeichert"] = True
-    st.rerun()
 
 
 
@@ -208,7 +247,11 @@ def zeige_feedback(erg):
 # ---------------------------------------------------------------------------
 
 def zeige_auswertung():
-    eintraege = feedback_laden()
+    try:
+        eintraege = feedback_laden()
+    except Exception as e:
+        st.error(f"Feedback konnte nicht geladen werden: {e}")
+        return
     if not eintraege:
         st.info("Noch kein Feedback vorhanden. Lade Belege hoch und bewerte die Ergebnisse.")
         return

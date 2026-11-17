@@ -29,11 +29,28 @@ python test_logik.py   # Tests ohne API-Aufruf
 | `prompts.py` | System-Prompt + `PROMPT_VERSION` |
 | `beleg_schema.py` | `KATEGORIEN`, `FEEDBACK_FELDER`, Pydantic-Modell `BelegAnalyse`, Parsing/Vergleich von Beträgen, Datum, Steuersätzen |
 | `extraction.py` | `MODEL`, Bildaufbereitung (PDF → Bilder, EXIF-Drehung, max. 2000 px, JPEG), API-Call, JSON-Extraktion |
-| `storage.py` | `data/feedback.jsonl` (eine Zeile pro Bewertung), Originalbelege in `data/belege/<sha256[:16]>.<ext>` |
+| `auth.py` | Google-Login über `st.login`, nur E-Mails aus `[zugang].erlaubte_emails`. Fail closed: ohne `[auth]` oder mit leerer Liste ist die App gesperrt |
+| `storage.py` | Ein gemeinsamer Ordner für alle Benutzer. Mit `[google_drive]`: Drive-Ordner `belege/` + `feedback/` (eine JSON-Datei pro Bewertung). Sonst lokal `data/` (bzw. `BELEG_DATENORDNER`): `feedback.jsonl` + `belege/`, Rechte 0700/0600 |
+| `drive_token_holen.py` | Einmalig lokal: Refresh-Token für den Drive-Zugriff erzeugen und Ordnerzugriff prüfen |
 | `test_logik.py` | Assert-Tests für Parsing, Vergleich, JSON-Extraktion, Pydantic |
 
 **Ablauf:** Upload → `datei_zu_bildern` → `analysieren` (OpenRouter) → `BelegAnalyse` →
 Ergebnis in `st.session_state["ergebnis"]` → Feedback-Formular → `feedback_speichern`.
+
+## Login (Google) und Ablage (Google Drive)
+
+Secrets-Vorlage: `.streamlit/secrets.toml.example` (lokal nach `.streamlit/secrets.toml`, in Streamlit
+Cloud unter Settings → Secrets). Lokal ohne Login entwickeln: `LOGIN_DEAKTIVIERT=1` in `.env`
+(wirkt nur über die Umgebung, nie über Secrets).
+
+- OAuth-Client (Typ „Webanwendung“) in der Google Cloud Console, Weiterleitungs-URIs
+  `https://<app>.streamlit.app/oauth2callback` und `http://localhost:8501/oauth2callback`.
+- Zusätzlich Weiterleitungs-URI `http://localhost:8080/` für `drive_token_holen.py`.
+- **Ablage auf Streamlit Cloud = Google Drive**, weil das Dateisystem dort nicht dauerhaft ist (`data/` geht bei
+  Neustart, Redeploy oder Schlafmodus verloren). Die App schreibt mit einem Refresh-Token des Ordner-Besitzers
+  (kein Service-Account: der hat bei privaten Gmail-Konten kein Speicherkontingent). Zustimmungsbildschirm
+  auf „In Produktion“, sonst läuft der Token nach 7 Tagen ab. Halb konfiguriertes oder nicht erreichbares
+  Drive sperrt die App, statt still lokal zu speichern.
 
 ## Wichtige Entscheidungen
 
