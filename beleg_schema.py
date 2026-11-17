@@ -2,34 +2,91 @@
 
 import re
 from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Feste Kategorienliste – das Modell MUSS eine davon wählen.
-KATEGORIEN = {
-    "restaurant_beleg": "Restaurant-Beleg / Quittung",
-    "restaurant_mit_ec_beleg": "Restaurant-Beleg + EC-/Kartenbeleg",
-    "nur_ec_beleg": "Nur EC-/Kartenbeleg (keine Rechnung)",
-    "bewirtungsbeleg_intern": "Interner Bewirtungsbeleg (Formular)",
-    "sonstiger_beleg": "Sonstiger Beleg (keine Bewirtung)",
+# Schlüssel nie umbenennen (stehen im gespeicherten Feedback), nur ergänzen.
+STANDARD_KATEGORIEN = {
+    "restaurant_beleg": "Bewirtung: Restaurant-Beleg / Quittung",
+    "restaurant_mit_ec_beleg": "Bewirtung: Restaurant-Beleg + EC-/Kartenbeleg",
+    "nur_ec_beleg": "Bewirtung: nur EC-/Kartenbeleg (keine Rechnung)",
+    "bewirtungsbeleg_intern": "Bewirtung: interner Bewirtungsbeleg (Formular)",
+    "tankbeleg": "Tankbeleg (Kraftstoff)",
+    "uebernachtung": "Übernachtung / Hotelrechnung",
+    "sonstiger_beleg": "Sonstiger Beleg",
     "unlesbar": "Unlesbar / kein Beleg",
 }
+# Aktuell gültige Kategorien = Standard + in der App angelegte (siehe kategorien_registrieren).
+# Ein gemeinsames Dict für alle Sitzungen – alle Benutzer arbeiten mit denselben Kategorien.
+KATEGORIEN = dict(STANDARD_KATEGORIEN)
+
+
+def kategorien_registrieren(aktive: dict[str, str]) -> None:
+    """Setzt die gültigen Kategorien (Standard bleibt immer). aktive = {schluessel: Name}."""
+    neu = {**aktive, **STANDARD_KATEGORIEN}
+    for key in list(KATEGORIEN):
+        if key not in neu:
+            del KATEGORIEN[key]
+    KATEGORIEN.update(neu)
+
+
+BEWIRTUNG_KATEGORIEN = {"restaurant_beleg", "restaurant_mit_ec_beleg", "nur_ec_beleg", "bewirtungsbeleg_intern"}
 
 # Felder, die im Feedback einzeln bewertet/korrigiert werden: (key, Label, Typ)
 FEEDBACK_FELDER = [
     ("belegnummer", "Belegnummer", "text"),
-    ("restaurant_name", "Restaurant", "text"),
+    ("restaurant_name", "Restaurant / Aussteller", "text"),
     ("adresse", "Adresse", "text"),
-    ("datum", "Datum (JJJJ-MM-TT)", "datum"),
+    ("datum", "Datum (TT.MM.JJJJ)", "datum"),
     ("uhrzeit", "Uhrzeit (HH:MM)", "text"),
     ("netto", "Netto (€)", "betrag"),
     ("mwst", "MwSt. gesamt (€)", "betrag"),
-    ("brutto", "Brutto (€)", "betrag"),
+    ("brutto", "Gesamtbetrag Rechnung (€)", "betrag"),
+    ("ec_betrag", "EC-/Kartenbetrag (€)", "betrag"),
     ("trinkgeld", "Trinkgeld (€)", "betrag"),
     ("steuersaetze", "Steuersätze (%)", "saetze"),
 ]
 
 _LEER = {"", "null", "none", "-", "–"}
+
+
+# ---------------------------------------------------------------------------
+# Cent-genaues Rechnen. Alle Summen/Differenzen laufen über Decimal (keine Float-Fehler wie
+# 0,1 + 0,2 = 0,30000000000000004) und werden kaufmännisch auf Cent gerundet.
+# ---------------------------------------------------------------------------
+
+# Toleranzen: Kassen runden die MwSt. oft pro Position statt auf die Summe -> wenige Cent Differenz
+# sind normal und kein Lesefehler. Alles darüber -> Nachfrage.
+TOLERANZ_SUMME = 0.02  # € – Steuerzeilen gegen Gesamtbetrag, EC gegen Rechnung
+TOLERANZ_ZEILE = 0.03  # € – MwSt. einer Zeile gegen Satz × Netto
+
+
+def _d(x) -> Decimal:
+    return Decimal(str(x))
+
+
+def _cent(x: Decimal) -> float:
+    return float(x.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def summe(werte) -> float:
+    return _cent(sum((_d(w) for w in werte), Decimal(0)))
+
+
+def differenz(a, b) -> float:
+    return _cent(_d(a) - _d(b))
+
+
+def mwst_aus_netto(netto, satz) -> float:
+    """19 % auf 100,00 netto -> 19,00"""
+    return _cent(_d(netto) * _d(satz) / 100)
+
+
+def mwst_aus_brutto(brutto, satz) -> float:
+    """In 119,00 brutto enthaltene 19 % -> 19,00"""
+    return _cent(_d(brutto) * _d(satz) / (100 + _d(satz)))
 
 
 # ---------------------------------------------------------------------------
@@ -131,16 +188,50 @@ def werte_gleich(feld_typ, a, b):
     return a == b
 
 
+# ---------------------------------------------------------------------------
+# Deutsche Anzeige (DIN 5008): 04.09.2026, 18:30, 1.234,50
+# Gespeichert wird weiterhin ISO (2026-09-04, 133.4) – nur die Oberfläche ist deutsch.
+# ---------------------------------------------------------------------------
+
+_ISO_DATUM = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def betrag_de(value: float) -> str:
+    """1234.5 -> '1.234,50'"""
+    return f"{value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def datum_de(value) -> str:
+    """'2026-09-04' -> '04.09.2026' (andere Werte unverändert)."""
+    if not value:
+        return ""
+    s = str(value)
+    return f"{s[8:10]}.{s[5:7]}.{s[:4]}" if _ISO_DATUM.match(s) else s
+
+
+def zeitpunkt_de(value) -> str:
+    """'2026-11-17T16:20:05' -> '17.11.2026 16:20'"""
+    if not value:
+        return ""
+    try:
+        return datetime.fromisoformat(str(value)).strftime("%d.%m.%Y %H:%M")
+    except ValueError:
+        return str(value)
+
+
 def anzeige(value):
-    """Wert -> String für Anzeige / Editor."""
+    """Wert -> String für Anzeige / Editor, deutsch formatiert (wird von parse_* wieder gelesen)."""
     if value is None:
         return ""
     if isinstance(value, list):
+        # Steuersätze: Komma ist hier Trennzeichen, deshalb keine Dezimalkommas (5.5 bleibt 5.5)
         return ", ".join(
             str(int(v)) if isinstance(v, float) and v.is_integer() else str(v) for v in value
         )
     if isinstance(value, float):
-        return f"{value:.2f}"
+        return betrag_de(value)
+    if isinstance(value, str) and _ISO_DATUM.match(value):
+        return datum_de(value)
     return str(value)
 
 
@@ -148,8 +239,29 @@ def anzeige(value):
 # Pydantic-Modell der Modell-Antwort
 # ---------------------------------------------------------------------------
 
+class Steuerzeile(BaseModel):
+    """Eine Zeile der MwSt.-Aufstellung, so wie sie auf dem Beleg steht (nichts gerechnet)."""
+
+    satz: float | None = None
+    netto: float | None = None
+    mwst: float | None = None
+    brutto: float | None = None
+
+    @field_validator("satz", "netto", "mwst", "brutto", mode="before")
+    @classmethod
+    def _zahl(cls, v):
+        if isinstance(v, str):
+            v = v.replace("%", "")
+        return parse_betrag(v)
+
+
 class BelegAnalyse(BaseModel):
     kategorie: str = "sonstiger_beleg"
+    kategorie_unsicher: bool = False
+    kategorie_grund: str | None = None
+    fehlende_pflichtangaben: list[str] = Field(default_factory=list)  # laut Kategorie-Beschreibung
+    ausland: bool = False
+    ec_passt_zur_rechnung: bool | None = None  # None = kein EC-Beleg dabei / nicht prüfbar
     lesbar: bool = False
     steuersatz_erkennbar: bool = False
     datum_erkennbar: bool = False
@@ -162,8 +274,11 @@ class BelegAnalyse(BaseModel):
     mwst: float | None = None
     brutto: float | None = None
     trinkgeld: float | None = None
+    ec_betrag: float | None = None
+    steuerzeilen: list[Steuerzeile] = Field(default_factory=list)
     steuersaetze: list[float] = Field(default_factory=list)
     hinweise: list[str] = Field(default_factory=list)
+    korrekturen: list[str] = Field(default_factory=list)  # nur vom Code gesetzt (Umdeutungen), nie vom Modell
 
     @field_validator("kategorie", mode="before")
     @classmethod
@@ -171,12 +286,13 @@ class BelegAnalyse(BaseModel):
         s = str(v or "").strip().lower().replace("-", "_").replace(" ", "_")
         if s in KATEGORIEN:
             return s
-        for key, label in KATEGORIEN.items():  # Toleranz: Label statt Schlüssel
-            if str(v).strip().casefold() == label.casefold():
+        eingabe = str(v).strip().casefold()
+        for key, label in KATEGORIEN.items():  # Toleranz: Label statt Schlüssel, auch ohne "Bewirtung: "
+            if eingabe in (label.casefold(), label.split(": ", 1)[-1].casefold()):
                 return key
         return "sonstiger_beleg"
 
-    @field_validator("netto", "mwst", "brutto", "trinkgeld", mode="before")
+    @field_validator("netto", "mwst", "brutto", "trinkgeld", "ec_betrag", mode="before")
     @classmethod
     def _betrag(cls, v):
         return parse_betrag(v)
@@ -186,7 +302,7 @@ class BelegAnalyse(BaseModel):
     def _datum(cls, v):
         return parse_datum(v)
 
-    @field_validator("belegnummer", "restaurant_name", "adresse", "uhrzeit", mode="before")
+    @field_validator("belegnummer", "restaurant_name", "adresse", "uhrzeit", "kategorie_grund", mode="before")
     @classmethod
     def _text(cls, v):
         return parse_text(v)
@@ -196,7 +312,7 @@ class BelegAnalyse(BaseModel):
     def _saetze(cls, v):
         return parse_saetze(v)
 
-    @field_validator("hinweise", mode="before")
+    @field_validator("hinweise", "fehlende_pflichtangaben", mode="before")
     @classmethod
     def _hinweise(cls, v):
         if v is None:
@@ -205,27 +321,151 @@ class BelegAnalyse(BaseModel):
             return [v] if v.strip() else []
         return [str(x) for x in v if str(x).strip()]
 
-    @field_validator("lesbar", "steuersatz_erkennbar", "datum_erkennbar", mode="before")
+    @field_validator("steuerzeilen", mode="before")
+    @classmethod
+    def _zeilen(cls, v):
+        if not isinstance(v, list):
+            return []
+        return [z for z in v if isinstance(z, dict)]
+
+    @field_validator("ec_passt_zur_rechnung", mode="before")
+    @classmethod
+    def _bool_oder_none(cls, v):
+        if v is None or (isinstance(v, str) and v.strip().lower() in _LEER):
+            return None
+        if isinstance(v, str):
+            return v.strip().lower() in {"true", "ja", "yes", "1"}
+        return bool(v)
+
+    @field_validator("lesbar", "steuersatz_erkennbar", "datum_erkennbar", "kategorie_unsicher", "ausland",
+                     mode="before")
     @classmethod
     def _bool(cls, v):
         if isinstance(v, str):
             return v.strip().lower() in {"true", "ja", "yes", "1"}
         return bool(v)
 
+    @model_validator(mode="after")
+    def _ableiten(self):
+        """Summen und Trinkgeld rechnet der Code, nicht das Modell (LLMs verrechnen sich). Cent-genau (Decimal)."""
+        self.korrekturen = []
+        self._summen_abgleichen()
+        zeilen = self.steuerzeilen
+        if zeilen and all(z.mwst is not None for z in zeilen):
+            self.mwst = summe(z.mwst for z in zeilen)
+            netto = [z.netto if z.netto is not None else (differenz(z.brutto, z.mwst) if z.brutto is not None else None)
+                     for z in zeilen]
+            if all(n is not None for n in netto):
+                self.netto = summe(netto)
+        if zeilen:
+            self.steuersaetze = parse_saetze(self.steuersaetze + [z.satz for z in zeilen if z.satz is not None])
+        if self.ec_betrag is not None and self.brutto is not None:
+            # Trinkgeld = EC minus Rechnung; ein vom Modell selbst errechneter Wert wird ersetzt
+            diff = differenz(self.ec_betrag, self.brutto)
+            self.trinkgeld = diff if diff > 0 else None
+        return self
+
+    @staticmethod
+    def _zeilen_summe(zeilen) -> float | None:
+        teile = []
+        for z in zeilen:
+            if z.brutto is not None:
+                teile.append(z.brutto)
+            elif z.netto is not None and z.mwst is not None:
+                teile.append(summe([z.netto, z.mwst]))
+            else:
+                return None
+        return summe(teile)
+
+    def _summen_abgleichen(self) -> None:
+        """Löst zwei typische, rechnerisch EINDEUTIGE Ablesefehler auf (sonst bleibt alles wie abgelesen):
+
+        a) Spalten verwechselt: Kassenbons drucken pro Satz mal Netto, mal Brutto. Wurde Brutto als Netto
+           gelesen, passt die MwSt. nur zum Brutto (20,00 × 19/119 = 3,19 statt 20,00 × 19 % = 3,80).
+        b) Gesamtbetrag inkl. Trinkgeld: Steht ein Trinkgeld auf dem Beleg und ergibt
+           Steuerzeilen + Trinkgeld exakt den abgelesenen Gesamtbetrag, war das die Zahlsumme, nicht die Rechnung.
+
+        Übernommen wird eine Deutung nur, wenn danach die Steuerzeilen cent-genau zum Gesamtbetrag passen.
+        Die unveränderte Lesung hat Vorrang. Jede Umdeutung wird in `korrekturen` begründet."""
+        if not self.steuerzeilen or self.brutto is None:
+            return
+        trinkgeld = self.trinkgeld if self.trinkgeld and self.trinkgeld > 0 else None
+
+        umgedeutet_zeilen, umgedeutet = [], []
+        for z in self.steuerzeilen:
+            z = z.model_copy()
+            if z.satz and z.netto is not None and z.mwst is not None and z.brutto is None:
+                passt_als_netto = abs(mwst_aus_netto(z.netto, z.satz) - z.mwst) <= TOLERANZ_ZEILE
+                passt_als_brutto = abs(mwst_aus_brutto(z.netto, z.satz) - z.mwst) <= TOLERANZ_ZEILE
+                if passt_als_brutto and not passt_als_netto:
+                    z.brutto, z.netto = z.netto, differenz(z.netto, z.mwst)
+                    umgedeutet.append(z)
+            umgedeutet_zeilen.append(z)
+
+        varianten = [(self.steuerzeilen, [])]
+        if umgedeutet:
+            varianten.append((umgedeutet_zeilen, umgedeutet))
+        for zeilen, geaendert in varianten:
+            rechnung = self._zeilen_summe(zeilen)
+            if rechnung is None:
+                continue
+            passt = abs(rechnung - self.brutto) <= TOLERANZ_SUMME
+            mit_trinkgeld = trinkgeld is not None and abs(summe([rechnung, trinkgeld]) - self.brutto) <= TOLERANZ_SUMME
+            if not (passt or mit_trinkgeld):
+                continue
+            if not geaendert and passt:
+                return  # alles stimmt wie abgelesen
+            self.steuerzeilen = list(zeilen)
+            for z in geaendert:
+                self.korrekturen.append(
+                    f"{z.satz:g} %: abgelesener Betrag {betrag_de(z.brutto)} € ist brutto, nicht netto "
+                    f"(MwSt. {betrag_de(z.mwst)} € = {z.satz:g}/{100 + z.satz:g} davon). "
+                    f"Netto daraus: {betrag_de(z.netto)} €."
+                )
+            if not passt and mit_trinkgeld:
+                self.korrekturen.append(
+                    f"Abgelesener Gesamtbetrag {betrag_de(self.brutto)} € enthält das aufgedruckte Trinkgeld "
+                    f"{betrag_de(trinkgeld)} €. Rechnungsbetrag laut Steuerzeilen: {betrag_de(rechnung)} €."
+                )
+                if self.ec_betrag is None:
+                    self.ec_betrag = self.brutto  # gezahlte Summe inkl. Trinkgeld
+                self.brutto = rechnung
+            return
+
+    @property
+    def ist_bewirtung(self) -> bool:
+        return self.kategorie in BEWIRTUNG_KATEGORIEN
+
+    def gesamtbetrag(self) -> float | None:
+        if self.ec_betrag is not None and (self.brutto is None or self.ec_betrag >= self.brutto):
+            return self.ec_betrag
+        if self.brutto is None:
+            return None
+        return summe([self.brutto, self.trinkgeld or 0])
+
     def bewirtungsdaten(self) -> dict:
-        """Daten für den internen Bewirtungsbeleg – im Code abgeleitet, nicht doppelt vom Modell."""
-        gesamt = None
-        if self.brutto is not None:
-            gesamt = round(self.brutto + (self.trinkgeld or 0), 2)
+        """Anzeige-Daten – im Code abgeleitet, nicht doppelt vom Modell."""
+        if not self.ist_bewirtung:
+            return {
+                "Belegnummer": self.belegnummer,
+                "Aussteller": self.restaurant_name,
+                "Adresse": self.adresse,
+                "Datum": self.datum,
+                "Netto": self.netto,
+                "MwSt.": self.mwst,
+                "Steuersätze": self.steuersaetze,
+                "Gesamtbetrag": self.brutto,
+            }
         return {
             "Belegnummer": self.belegnummer,
             "Restaurant": self.restaurant_name,
             "Adresse": self.adresse,
             "Tag der Bewirtung": self.datum,
-            "Brutto (Rechnung)": self.brutto,
+            "Netto": self.netto,
             "MwSt.": self.mwst,
             "Steuersätze": self.steuersaetze,
+            "Brutto (Rechnung)": self.brutto,
+            "EC-/Kartenbetrag": self.ec_betrag,
             "Trinkgeld": self.trinkgeld,
-            "Gesamtbetrag inkl. Trinkgeld": gesamt,
+            "Gesamtbetrag inkl. Trinkgeld": self.gesamtbetrag(),
         }
-

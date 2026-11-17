@@ -4,11 +4,17 @@ import time
 
 import streamlit as st
 
-from auth import aktueller_benutzer, login_erzwingen
-from beleg_schema import FEEDBACK_FELDER, KATEGORIEN, anzeige, normalisieren, werte_gleich
+from auth import aktueller_benutzer, darf_kategorien_bearbeiten, login_erzwingen
+from beleg_schema import FEEDBACK_FELDER, KATEGORIEN, BelegAnalyse, kategorien_registrieren, anzeige, normalisieren, werte_gleich, zeitpunkt_de
 from datenschutz import ist_datenschutzseite, zeige_datenschutz
-from extraction import MAX_PDF_SEITEN, MODEL, AnalyseFehler, analysieren, datei_zu_bildern
-from prompts import PROMPT_VERSION
+from extraction import MAX_SEITEN, MODEL, MODEL_GROSS, AnalyseFehler, dateien_zu_bildern, text_anfrage_json
+from pipeline import beleg_lesen
+from kategorien import ASSISTENT_PROMPT, aktueller_stand, assistent_nachricht, labels, prompt_abschnitt, wissens_hash
+from kategorien import aktiv as kat_aktiv
+from kategorien import als_dokument as kat_dokument
+from kategorien import schluessel_aus_name as kat_schluessel
+from kategorien import sichtbar as kat_sichtbar
+from prompts import prompt_version, system_prompt
 from storage import (
     AblageFehler,
     ablage_beschreibung,
@@ -16,7 +22,15 @@ from storage import (
     beleg_speichern,
     datei_hash,
     feedback_laden,
+    beleg_laden,
+    entscheidung_speichern,
+    entscheidungen_laden,
+    kategorie_dokument_ablegen,
+    kategorie_speichern,
+    kategorien_laden,
     feedback_speichern,
+    nachfrage_speichern,
+    nachfragen_laden,
     schon_bewertet,
 )
 
@@ -35,6 +49,16 @@ except AblageFehler as e:
     st.stop()
 st.sidebar.caption(f"Ablage: {ablage_beschreibung()}")
 
+# Kategorie-Wissen aus der App -> gültige Kategorien + Prompt (gilt für alle Benutzer gleich)
+try:
+    KAT_STAND = aktueller_stand(kategorien_laden())
+except Exception as e:
+    st.warning(f"Kategorien konnten nicht geladen werden, es gelten nur die Standard-Kategorien: {e}")
+    KAT_STAND = aktueller_stand([])
+kategorien_registrieren(labels(KAT_STAND))
+SYSTEM_PROMPT_AKTUELL = system_prompt(prompt_abschnitt(KAT_STAND))
+PROMPT_VERSION = prompt_version(wissens_hash(KAT_STAND))
+
 
 def _kategorie_label(key):
     return KATEGORIEN.get(key, key)
@@ -44,87 +68,213 @@ def _kategorie_label(key):
 # Analyse ausführen und Ergebnis im Session-State halten
 # ---------------------------------------------------------------------------
 
-def analyse_starten(uploaded_file):
-    file_bytes = uploaded_file.getvalue()
-    sha = datei_hash(file_bytes)
+def _dateien(uploads) -> list[tuple[str, bytes, str]]:
+    return [(u.name, u.getvalue(), u.type) for u in uploads]
+
+
+def beleg_hash(dateien) -> str:
+    """Eine Datei: Hash der Datei (wie bisher). Mehrere: Hash über die Einzel-Hashes in Upload-Reihenfolge."""
+    if len(dateien) == 1:
+        return datei_hash(dateien[0][1])
+    return datei_hash("|".join(datei_hash(b) for _, b, _ in dateien).encode())
+
+
+def _belege_speichern(dateien) -> list[str]:
+    return [beleg_speichern(b, name, datei_hash(b)) for name, b, _ in dateien]
+
+
+def analyse_starten(uploads):
+    dateien = _dateien(uploads)
+    sha = beleg_hash(dateien)
+    dateiname = ", ".join(name for name, _, _ in dateien)
     try:
-        bilder, seiten = datei_zu_bildern(file_bytes, uploaded_file.type)
+        bilder, seiten_gesamt, seiten_gelesen = dateien_zu_bildern(dateien)
     except Exception as e:  # defektes PDF / Bildformat
         st.session_state["fehler"] = (f"Datei konnte nicht gelesen werden: {e}", None)
         return
 
     t0 = time.time()
-    try:
-        analyse, raw, usage = analysieren(bilder)
-    except AnalyseFehler as e:
-        st.session_state["fehler"] = (str(e), e.raw)
-        return
-    except Exception as e:
-        st.session_state["fehler"] = (f"Fehler beim Modell-Aufruf: {e}", None)
-        return
+    with st.status("Analysiere Beleg …", expanded=False) as fortschritt:
+        try:
+            lese = beleg_lesen(bilder, dateien, status=lambda text: fortschritt.update(label=text),
+                               system=SYSTEM_PROMPT_AKTUELL)
+        except AnalyseFehler as e:
+            st.session_state["fehler"] = (str(e), e.raw)
+            fortschritt.update(label="Analyse fehlgeschlagen", state="error")
+            return
+        except Exception as e:
+            st.session_state["fehler"] = (f"Fehler beim Modell-Aufruf: {e}", None)
+            fortschritt.update(label="Analyse fehlgeschlagen", state="error")
+            return
+        fortschritt.update(label="Analyse fertig", state="complete")
+
+    dauer_s = round(time.time() - t0, 1)
+    gruende = list(lese.gruende)
+    if seiten_gelesen < seiten_gesamt:
+        gruende.append(f"Nur {seiten_gelesen} von {seiten_gesamt} Seiten gelesen (Obergrenze {MAX_SEITEN}).")
 
     st.session_state.pop("fehler", None)
     st.session_state["ergebnis"] = {
         "sha": sha,
-        "dateiname": uploaded_file.name,
-        "mime": uploaded_file.type,
-        "file_bytes": file_bytes,
+        "dateiname": dateiname,
+        "dateien": dateien,
         "vorschau": bilder,
-        "seiten": seiten,
-        "analyse": analyse,
-        "raw": raw,
-        "usage": usage,
-        "dauer_s": round(time.time() - t0, 1),
+        "seiten_gesamt": seiten_gesamt,
+        "seiten_gelesen": seiten_gelesen,
+        "analyse": lese.analyse,
+        "modell": lese.modell,
+        "lesungen": lese.lesungen,
+        "abweichungen": lese.abweichungen,
+        "ungeklaert": lese.ungeklaert,
+        "schiedsrichter": lese.schiedsrichter,
+        "befunde": lese.befunde,
+        "nachfrage_gruende": gruende,
+        "raw": lese.raw,
+        "usage": lese.usage,
+        "dauer_s": dauer_s,
+        "prompt_version": PROMPT_VERSION,
     }
+    st.session_state["ergebnis"]["nachfrage_status"] = (
+        _nachfrage_ablegen(st.session_state["ergebnis"]) if gruende else None
+    )
     st.session_state["gespeichert"] = False
+
+
+def _lesungen_protokoll(erg) -> list[dict]:
+    """Alle Lesungen (Modell, Variante, Rohantwort) – für spätere Auswertung, wer wie oft richtig lag."""
+    return [{"modell": l.modell, "variante": l.variante, "rohantwort": l.raw, "fehler": l.fehler,
+             "analyse": l.analyse.model_dump() if l.analyse else None} for l in erg["lesungen"]]
+
+
+def _nachfrage_ablegen(erg) -> str:
+    """Unsichere/unstimmige Belege sofort ablegen – unabhängig davon, ob jemand Feedback gibt."""
+    analyse = erg["analyse"]
+    try:
+        pfade = _belege_speichern(erg["dateien"])
+        neu = nachfrage_speichern({
+            "datei_sha256": erg["sha"],
+            "dateiname": erg["dateiname"],
+            "beleg_pfad": pfade[0],
+            "beleg_pfade": pfade,
+            "kategorie": analyse.kategorie,
+            "gruende": erg["nachfrage_gruende"],
+            "analyse": analyse.model_dump(),
+            "rohantwort": erg["raw"],
+            "lesungen": _lesungen_protokoll(erg),
+            "modell": erg["modell"],
+            "prompt_version": erg["prompt_version"],
+            "benutzer_email": aktueller_benutzer(),
+        })
+    except Exception as e:
+        return f"Ablegen fehlgeschlagen: {e}"
+    return "abgelegt" if neu else "war schon abgelegt"
 
 
 # ---------------------------------------------------------------------------
 # Anzeige
 # ---------------------------------------------------------------------------
 
+def _wert(v) -> str:
+    """Tabellenwert: Beträge mit €, leere Werte als Gedankenstrich (wird vorgelesen als 'Strich')."""
+    if isinstance(v, float):
+        return f"{anzeige(v)} €"
+    if isinstance(v, list):  # Steuersätze
+        return ", ".join(f"{anzeige([s])} %" for s in v) or "–"
+    return anzeige(v) or "–"
+
+
+def _tabelle(zeilen: list[dict]) -> None:
+    # st.table statt st.dataframe: echte HTML-Tabelle, für Screenreader lesbar, nichts wird abgeschnitten
+    st.table(zeilen)
+
+
+def _pruefzeile(name: str, ok: bool) -> str:
+    # Ergebnis immer als Wort, nicht nur als Symbol/Farbe
+    return f"- {':material/check_circle:' if ok else ':material/cancel:'} {name}: **{'ja' if ok else 'nein'}**"
+
+
 def zeige_ergebnis(erg):
     analyse = erg["analyse"]
-    col_bild, col_daten = st.columns([1, 2])
+    gruende = erg.get("nachfrage_gruende") or []
+    status = erg.get("nachfrage_status") or ""
 
+    # 1. Gesamtergebnis zuerst – das Wichtigste oben
+    if gruende:
+        text = "**Nachfrage nötig.** " + (
+            f"Ablegen fehlgeschlagen: {status}" if status.startswith("Ablegen fehlgeschlagen")
+            else f"Der Beleg wurde unter „Nachfragen“ {status} – dort prüfen, korrigieren und entscheiden."
+        )
+        st.error(text + "\n\n" + "\n".join(f"- {g}" for g in gruende), icon=":material/help:")
+    else:
+        st.success("**Alles stimmig.** Alle Prüfungen bestanden, keine Nachfrage nötig.",
+                   icon=":material/check_circle:")
+
+    col_bild, col_daten = st.columns([2, 3], gap="large")
+
+    # 2. Beleg
     with col_bild:
-        st.subheader("Hochgeladener Beleg")
-        if erg["seiten"] > MAX_PDF_SEITEN:
-            st.warning(
-                f"PDF hat {erg['seiten']} Seiten – nur die ersten {MAX_PDF_SEITEN} wurden analysiert."
-            )
-        for bild in erg["vorschau"]:
-            st.image(bild, width="stretch")
+        st.subheader("Beleg")
+        gesamt, gelesen = erg["seiten_gesamt"], erg["seiten_gelesen"]
+        if gelesen < gesamt:
+            st.warning(f"{gesamt} Seiten – nur die ersten {gelesen} wurden gelesen (Obergrenze {MAX_SEITEN}).")
+        else:
+            st.caption(f"{gesamt} Seite(n) aus {len(erg['dateien'])} Datei(en): {erg['dateiname']}")
+        n = len(erg["vorschau"])
+        for i, bild in enumerate(erg["vorschau"], start=1):
+            st.image(bild, width="stretch", caption=f"Beleg, Seite {i} von {n}")
 
+    # 3. Ergebnis
     with col_daten:
-        st.subheader("Ergebnis der KI")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Kategorie", _kategorie_label(analyse.kategorie))
-        c2.metric("Lesbar", "Ja" if analyse.lesbar else "Nein")
-        c3.metric("Dauer", f"{erg['dauer_s']} s")
+        st.subheader("Ergebnis")
+        st.markdown(f"**Belegart:** {_kategorie_label(analyse.kategorie)}")
+        if analyse.kategorie_unsicher:
+            st.markdown(f"**Unsicher, weil:** {analyse.kategorie_grund or 'keine Begründung'}")
 
-        st.write("**Prüfungen:**")
-        p1, p2 = st.columns(2)
-        p1.write(f"Steuersatz erkennbar: {'✅' if analyse.steuersatz_erkennbar else '❌'}")
-        p2.write(f"Datum erkennbar: {'✅' if analyse.datum_erkennbar else '❌'}")
+        st.markdown("**Prüfungen**")
+        st.markdown("\n".join([
+            _pruefzeile("Lesbar", analyse.lesbar),
+            _pruefzeile("Steuersatz ausgewiesen", analyse.steuersatz_erkennbar or bool(analyse.steuerzeilen)),
+            _pruefzeile("Datum erkennbar", analyse.datum_erkennbar or bool(analyse.datum)),
+            _pruefzeile("Rechnung geht rechnerisch auf", not erg.get("befunde")),
+            _pruefzeile("Zweimal gleich gelesen", not erg.get("abweichungen")),
+        ] + ([_pruefzeile("EC-Beleg passt zur Rechnung", analyse.ec_passt_zur_rechnung)]
+             if analyse.ec_passt_zur_rechnung is not None else [])))
+        if erg.get("schiedsrichter"):
+            geklaert = len(erg.get("abweichungen", {})) - len(erg.get("ungeklaert", []))
+            st.caption(
+                f"Wegen Zweifeln hat zusätzlich das große Modell (`{erg['modell']}`) in höherer Auflösung "
+                f"gelesen; dessen Ergebnis wird angezeigt. Abweichungen geklärt: {geklaert} von "
+                f"{len(erg.get('abweichungen', {}))}."
+            )
+
+        if analyse.korrekturen:
+            st.info("**Vom Code umgedeutet** (rechnerisch eindeutig, Summe geht danach exakt auf)\n\n"
+                    + "\n".join(f"- {k}" for k in analyse.korrekturen), icon=":material/calculate:")
 
         if analyse.hinweise:
-            st.warning("**Hinweise der KI:**\n\n" + "\n".join(f"- {h}" for h in analyse.hinweise))
-        else:
-            st.success("Keine besonderen Hinweise.")
+            st.info("**Hinweise der KI**\n\n" + "\n".join(f"- {h}" for h in analyse.hinweise),
+                    icon=":material/info:")
 
-        st.subheader("Daten für Bewirtungsbeleg")
-        daten = analyse.bewirtungsdaten()
-        st.dataframe(
-            {"Feld": list(daten.keys()), "Wert": [anzeige(v) or "–" for v in daten.values()]},
-            hide_index=True,
-            width="stretch",
-        )
+        st.subheader("Daten für den Bewirtungsbeleg" if analyse.ist_bewirtung else "Belegdaten")
+        _tabelle([{"Feld": k, "Wert": _wert(v)} for k, v in analyse.bewirtungsdaten().items()])
 
-        with st.expander("Technische Details (Rohantwort, Tokens)"):
-            st.caption(f"Modell: `{MODEL}` · Prompt-Version: `{PROMPT_VERSION}`")
+        if analyse.steuerzeilen:
+            st.markdown("**MwSt.-Aufstellung** (wie auf dem Beleg abgelesen)")
+            _tabelle([{
+                "Steuersatz": f"{anzeige(z.satz)} %" if z.satz is not None else "–",
+                "Netto": _wert(z.netto), "MwSt.": _wert(z.mwst), "Brutto": _wert(z.brutto),
+            } for z in analyse.steuerzeilen])
+
+        with st.expander("Technische Details"):
+            dauer = f"{erg['dauer_s']:.1f}".replace(".", ",")
+            st.caption(f"Ergebnis von `{erg['modell']}` · Prompt-Version `{erg['prompt_version']}` · Dauer {dauer} s")
+            if erg.get("abweichungen"):
+                _tabelle([{"Feld": f, "Lesung 1": x or "–", "Lesung 2": y or "–"}
+                          for f, (x, y) in erg["abweichungen"].items()])
+            for nr, l in enumerate(erg["lesungen"], start=1):
+                st.markdown(f"**Lesung {nr}:** `{l.modell}`, Bild {l.variante}")
+                st.code(l.raw or l.fehler or "", language="json")
             st.json(erg["usage"])
-            st.code(erg["raw"], language="json")
 
     st.divider()
     zeige_feedback(erg)
@@ -134,9 +284,40 @@ def zeige_ergebnis(erg):
 # Feedback
 # ---------------------------------------------------------------------------
 
+def _felder_eingabe(analyse, praefix: str) -> dict[str, str]:
+    """Eingabefelder für alle FEEDBACK_FELDER, vorbelegt mit dem KI-Ergebnis (nur innerhalb von st.form)."""
+    korrekturen = {}
+    # Zeilenweise (je 2 Felder), damit die Tab-Reihenfolge der Lesereihenfolge entspricht
+    for i in range(0, len(FEEDBACK_FELDER), 2):
+        for spalte, (key, label, _typ) in zip(st.columns(2), FEEDBACK_FELDER[i:i + 2]):
+            korrekturen[key] = spalte.text_input(
+                label, value=anzeige(getattr(analyse, key)), key=f"{praefix}_{key}"
+            )
+    return korrekturen
+
+
+def _felder_auswerten(analyse, korrekturen: dict[str, str]):
+    """-> (felder, ungueltig). felder[key] = {modell, korrekt, richtig}; ungueltig = Labels nicht lesbarer Eingaben."""
+    ungueltig, felder = [], {}
+    for key, label, typ in FEEDBACK_FELDER:
+        modell_wert = getattr(analyse, key)
+        eingabe = korrekturen[key]
+        korrekt = normalisieren(typ, eingabe)
+        # Eingabe nicht leer, aber nicht lesbar -> Fehler statt stillem Datenverlust
+        if eingabe.strip() and typ in ("betrag", "datum") and korrekt is None:
+            ungueltig.append(label)
+        felder[key] = {
+            "modell": modell_wert,
+            "korrekt": korrekt,
+            "richtig": werte_gleich(typ, modell_wert, eingabe),
+        }
+    return felder, ungueltig
+
+
 def zeige_feedback(erg):
     analyse = erg["analyse"]
     st.subheader("Feedback: Was hat die KI richtig erkannt?")
+    st.caption("Hilft uns zu messen, wie gut die Erkennung ist. Bitte nur falsche Werte korrigieren.")
 
     if st.session_state.get("gespeichert"):
         st.success("Feedback gespeichert – danke! Du kannst den nächsten Beleg hochladen.")
@@ -150,7 +331,7 @@ def zeige_feedback(erg):
 
     st.caption(
         "Korrigiere nur die Werte, die falsch sind. Leeres Feld = steht nicht auf dem Beleg. "
-        "Beträge mit Komma oder Punkt, Datum als JJJJ-MM-TT oder TT.MM.JJJJ."
+        "Beträge wie 1.234,50 – Datum als TT.MM.JJJJ."
     )
 
     kategorie_keys = list(KATEGORIEN.keys())
@@ -162,13 +343,7 @@ def zeige_feedback(erg):
             format_func=_kategorie_label,
         )
 
-        korrekturen = {}
-        links, rechts = st.columns(2)
-        for i, (key, label, _typ) in enumerate(FEEDBACK_FELDER):
-            spalte = links if i % 2 == 0 else rechts
-            korrekturen[key] = spalte.text_input(
-                label, value=anzeige(getattr(analyse, key)), key=f"fb_{erg['sha']}_{key}"
-            )
+        korrekturen = _felder_eingabe(analyse, f"fb_{erg['sha']}")
 
         hinweise_ok = st.radio(
             "Waren die Hinweise der KI zutreffend?",
@@ -187,29 +362,15 @@ def zeige_feedback(erg):
     if not abgeschickt:
         return
 
-    ungueltig = []
-    felder = {}
-    for key, label, typ in FEEDBACK_FELDER:
-        modell_wert = getattr(analyse, key)
-        eingabe = korrekturen[key]
-        korrekt = normalisieren(typ, eingabe)
-        # Eingabe nicht leer, aber nicht lesbar -> Fehler statt stillem Datenverlust
-        if eingabe.strip() and typ in ("betrag", "datum") and korrekt is None:
-            ungueltig.append(label)
-        felder[key] = {
-            "modell": modell_wert,
-            "korrekt": korrekt,
-            "richtig": werte_gleich(typ, modell_wert, eingabe),
-        }
-
+    felder, ungueltig = _felder_auswerten(analyse, korrekturen)
     if ungueltig:
         st.error("Bitte prüfe diese Eingaben, sie konnten nicht gelesen werden: " + ", ".join(ungueltig))
         return
 
     st.session_state["bearbeiter"] = bearbeiter
     try:
-        pfad = beleg_speichern(erg["file_bytes"], erg["dateiname"], erg["sha"])
-        _feedback_ablegen(erg, analyse, kat_korrekt, felder, hinweise_ok, kommentar, bearbeiter, pfad)
+        pfade = _belege_speichern(erg["dateien"])
+        _feedback_ablegen(erg, analyse, kat_korrekt, felder, hinweise_ok, kommentar, bearbeiter, pfade)
     except Exception as e:  # z. B. Drive nicht erreichbar, Ordner nicht beschreibbar
         st.error(f"Speichern fehlgeschlagen – bitte erneut versuchen: {e}")
         return
@@ -217,13 +378,18 @@ def zeige_feedback(erg):
     st.rerun()
 
 
-def _feedback_ablegen(erg, analyse, kat_korrekt, felder, hinweise_ok, kommentar, bearbeiter, pfad):
+def _feedback_ablegen(erg, analyse, kat_korrekt, felder, hinweise_ok, kommentar, bearbeiter, pfade):
     feedback_speichern({
         "datei_sha256": erg["sha"],
         "dateiname": erg["dateiname"],
-        "beleg_pfad": pfad,
-        "modell": MODEL,
-        "prompt_version": PROMPT_VERSION,
+        "beleg_pfad": pfade[0],
+        "beleg_pfade": pfade,
+        "seiten": erg["seiten_gesamt"],
+        "modell": erg["modell"],
+        "schiedsrichter": erg.get("schiedsrichter", False),
+        "abweichungen": {f: list(w) for f, w in erg.get("abweichungen", {}).items()},
+        "lesungen": _lesungen_protokoll(erg),
+        "prompt_version": erg["prompt_version"],
         "dauer_s": erg["dauer_s"],
         "usage": erg["usage"],
         "rohantwort": erg["raw"],
@@ -238,6 +404,8 @@ def _feedback_ablegen(erg, analyse, kat_korrekt, felder, hinweise_ok, kommentar,
         "kommentar": kommentar.strip() or None,
         "bearbeiter": bearbeiter.strip() or None,
         "benutzer_email": aktueller_benutzer(),
+        "befunde_code": erg.get("befunde", []),
+        "nachfrage_gruende": erg.get("nachfrage_gruende", []),
     })
 
 
@@ -318,7 +486,7 @@ def zeige_auswertung():
             f = e["felder"].get(key)
             if f and not f["richtig"]:
                 fehler.append({
-                    "Zeitpunkt": e.get("zeitpunkt"),
+                    "Zeitpunkt": zeitpunkt_de(e.get("zeitpunkt")),
                     "Datei": e.get("dateiname"),
                     "Feld": label,
                     "KI": anzeige(f["modell"]),
@@ -332,6 +500,407 @@ def zeige_auswertung():
 
 
 # ---------------------------------------------------------------------------
+# Nachfragen: Mensch prüft, korrigiert und entscheidet
+# ---------------------------------------------------------------------------
+
+STATUS = {
+    "offen": "Offen",
+    "zurueckgestellt": "Zurückgestellt (Rückfrage läuft)",
+    "freigegeben": "Freigegeben",
+    "verworfen": "Verworfen",
+}
+ENTSCHEIDUNGEN = {
+    "freigegeben": "Freigeben – Daten stimmen (ggf. korrigiert), Beleg kann weiter",
+    "zurueckgestellt": "Zurückstellen – Rückfrage bei Mitarbeiter:in nötig (z. B. Rechnung fehlt)",
+    "verworfen": "Verwerfen – kein gültiger Beleg oder Duplikat",
+}
+_MIME = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+
+
+def _letzte_entscheidungen(entscheidungen: list[dict]) -> dict[str, dict]:
+    """Datei-Hash -> jüngste Entscheidung (Einträge werden nie überschrieben, nur angehängt)."""
+    letzte = {}
+    for e in sorted(entscheidungen, key=lambda e: e.get("zeitpunkt") or ""):
+        letzte[e.get("datei_sha256")] = e
+    return letzte
+
+
+@st.cache_data(show_spinner="Lade Beleg …", max_entries=30)
+def _vorschau(pfad: str) -> list[bytes]:
+    endung = "." + pfad.rsplit(".", 1)[-1].lower()
+    daten = beleg_laden(pfad)
+    return dateien_zu_bildern([(pfad, daten, _MIME.get(endung, "image/jpeg"))])[0]
+
+
+def zeige_nachfragen():
+    meldung = st.session_state.pop("nachfrage_meldung", None)
+    if meldung:
+        st.success(meldung, icon=":material/check_circle:")
+    try:
+        nachfragen = nachfragen_laden()
+        letzte = _letzte_entscheidungen(entscheidungen_laden())
+    except Exception as e:
+        st.error(f"Nachfragen konnten nicht geladen werden: {e}")
+        return
+    if not nachfragen:
+        st.success("Keine Nachfragen. Unklare Belege landen hier automatisch nach der Analyse.")
+        return
+
+    def status(n):
+        return letzte.get(n.get("datei_sha256"), {}).get("status", "offen")
+
+    anzahl = {s: sum(1 for n in nachfragen if status(n) == s) for s in STATUS}
+    for spalte, (s, label) in zip(st.columns(4), STATUS.items()):
+        spalte.metric(label.split(" (")[0], anzahl[s])
+
+    ansichten = {
+        "offen": f"Offen ({anzahl['offen']})",
+        "zurueckgestellt": f"Zurückgestellt ({anzahl['zurueckgestellt']})",
+        "erledigt": "Erledigt",
+        "alle": "Alle",
+    }
+    ansicht = st.radio("Anzeigen", list(ansichten), format_func=ansichten.get, horizontal=True,
+                       key="nachfragen_ansicht")
+    passend = {
+        "offen": lambda n: status(n) == "offen",
+        "zurueckgestellt": lambda n: status(n) == "zurueckgestellt",
+        "erledigt": lambda n: status(n) in ("freigegeben", "verworfen"),
+        "alle": lambda n: True,
+    }[ansicht]
+    liste = [n for n in reversed(nachfragen) if passend(n)]  # neueste zuerst
+    if not liste:
+        st.info("In dieser Ansicht gibt es nichts zu tun.")
+        return
+
+    gewaehlt = st.selectbox(
+        f"Nachfrage auswählen ({len(liste)})",
+        liste,
+        format_func=lambda n: (
+            f"{zeitpunkt_de(n.get('zeitpunkt'))} · {n.get('dateiname')} · {_kategorie_label(n.get('kategorie'))}"
+            f" · {STATUS[status(n)]}"
+        ),
+        key="nachfrage_auswahl",
+    )
+    st.divider()
+    _nachfrage_bearbeiten(gewaehlt, letzte.get(gewaehlt.get("datei_sha256")))
+
+    with st.expander("Alle Nachfragen als Tabelle"):
+        st.dataframe(
+            [{
+                "Zeitpunkt": zeitpunkt_de(n.get("zeitpunkt")),
+                "Status": STATUS[status(n)],
+                "Datei": n.get("dateiname"),
+                "Kategorie (KI)": _kategorie_label(n.get("kategorie")),
+                "Gründe": " | ".join(n.get("gruende", [])),
+                "Hochgeladen von": n.get("benutzer_email") or "",
+                "Entschieden von": letzte.get(n.get("datei_sha256"), {}).get("bearbeiter") or "",
+            } for n in reversed(nachfragen)],
+            hide_index=True,
+            width="stretch",
+        )
+
+
+def _nachfrage_bearbeiten(n: dict, letzte: dict | None):
+    sha = n.get("datei_sha256") or "ohne_hash"
+    analyse = BelegAnalyse.model_validate(n.get("analyse") or {})
+
+    st.error(
+        "**Warum nachgefragt wird**\n\n" + "\n".join(f"- {g}" for g in n.get("gruende", [])),
+        icon=":material/help:",
+    )
+    if letzte:
+        st.info(
+            f"**Letzte Entscheidung:** {STATUS.get(letzte.get('status'), letzte.get('status'))} – "
+            f"{zeitpunkt_de(letzte.get('zeitpunkt'))}, {letzte.get('bearbeiter') or 'unbekannt'}"
+            + (f"\n\n{letzte['kommentar']}" if letzte.get("kommentar") else ""),
+            icon=":material/history:",
+        )
+
+    col_bild, col_form = st.columns([2, 3], gap="large")
+    with col_bild:
+        st.subheader("Beleg")
+        pfade = n.get("beleg_pfade") or ([n["beleg_pfad"]] if n.get("beleg_pfad") else [])
+        for pfad in pfade:
+            try:
+                bilder = _vorschau(pfad)
+            except Exception as e:
+                st.warning(f"{pfad} konnte nicht geladen werden: {e}")
+                continue
+            for i, bild in enumerate(bilder, start=1):
+                st.image(bild, width="stretch", caption=f"{pfad}, Seite {i} von {len(bilder)}")
+
+    with col_form:
+        st.subheader("Prüfen und entscheiden")
+        st.caption(
+            "Die Felder zeigen, was die KI gelesen hat. Bitte mit dem Beleg vergleichen und nur Falsches "
+            "korrigieren. Beträge wie 1.234,50 – Datum als TT.MM.JJJJ."
+        )
+        if analyse.korrekturen:
+            st.info("**Vom Code umgedeutet**\n\n" + "\n".join(f"- {k}" for k in analyse.korrekturen),
+                    icon=":material/calculate:")
+        kategorie_keys = list(KATEGORIEN.keys())
+        with st.form(key=f"nachfrage_form_{sha}"):
+            kat = st.selectbox(
+                "Belegart",
+                kategorie_keys,
+                index=kategorie_keys.index(analyse.kategorie) if analyse.kategorie in kategorie_keys else 0,
+                format_func=_kategorie_label,
+            )
+            korrekturen = _felder_eingabe(analyse, f"nf_{sha}")
+            entscheidung = st.radio(
+                "Entscheidung", list(ENTSCHEIDUNGEN), format_func=ENTSCHEIDUNGEN.get, index=None,
+            )
+            kommentar = st.text_area(
+                "Begründung / Notiz",
+                help="Pflicht beim Zurückstellen und Verwerfen – z. B. wen du was gefragt hast.",
+                placeholder="z. B. Steuersatz 0 % ist korrekt: Gutschein-Einlösung",
+            )
+            abgeschickt = st.form_submit_button("Entscheidung speichern", type="primary")
+
+    if not abgeschickt:
+        return
+    if entscheidung is None:
+        st.error("Bitte eine Entscheidung auswählen.")
+        return
+    if entscheidung != "freigegeben" and not kommentar.strip():
+        st.error("Bitte kurz begründen, warum zurückgestellt bzw. verworfen wird.")
+        return
+    felder, ungueltig = _felder_auswerten(analyse, korrekturen)
+    if ungueltig:
+        st.error("Bitte prüfe diese Eingaben, sie konnten nicht gelesen werden: " + ", ".join(ungueltig))
+        return
+
+    bearbeiter = aktueller_benutzer()
+    try:
+        entscheidung_speichern({
+            "datei_sha256": sha,
+            "dateiname": n.get("dateiname"),
+            "status": entscheidung,
+            "kategorie": kat,
+            "daten": {k: f["korrekt"] for k, f in felder.items()},  # geprüfte Werte für den nächsten Schritt
+            "korrigierte_felder": [k for k, f in felder.items() if not f["richtig"]],
+            "kommentar": kommentar.strip() or None,
+            "bearbeiter": bearbeiter,
+            "gruende": n.get("gruende", []),
+        })
+        if entscheidung == "freigegeben":
+            # Freigabe = von einem Menschen geprüft -> zählt auch in der Auswertung (Trefferquote der KI)
+            feedback_speichern({
+                "quelle": "nachfrage",
+                "datei_sha256": sha,
+                "dateiname": n.get("dateiname"),
+                "beleg_pfad": n.get("beleg_pfad"),
+                "beleg_pfade": n.get("beleg_pfade"),
+                "modell": n.get("modell"),
+                "prompt_version": n.get("prompt_version"),
+                "analyse": n.get("analyse"),
+                "kategorie": {"modell": analyse.kategorie, "korrekt": kat, "richtig": analyse.kategorie == kat},
+                "felder": felder,
+                "kommentar": kommentar.strip() or None,
+                "bearbeiter": bearbeiter,
+                "benutzer_email": bearbeiter,
+            })
+    except Exception as e:
+        st.error(f"Speichern fehlgeschlagen – bitte erneut versuchen: {e}")
+        return
+
+    korrigiert = sum(1 for f in felder.values() if not f["richtig"]) + (analyse.kategorie != kat)
+    st.session_state["nachfrage_meldung"] = (
+        f"„{n.get('dateiname')}“: {STATUS[entscheidung]}"
+        + (f" – {korrigiert} Angabe(n) korrigiert." if korrigiert else ".")
+    )
+    st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Kategorien: anlegen, bearbeiten, löschen – fließen in den Prompt ein
+# ---------------------------------------------------------------------------
+
+_KAT_STATUS = {"aktiv": "Aktiv (wird bei jeder Analyse verwendet)", "entwurf": "Entwurf (noch nicht aktiv)"}
+_NEU = "__neu__"
+
+
+def _kat_feld_init(praefix: str, k: dict) -> None:
+    """Startwerte der Eingabefelder einmalig setzen (danach gehören sie dem Formular / dem Assistenten)."""
+    werte = {
+        "name": k.get("name", ""),
+        "beschreibung": k.get("beschreibung", ""),
+        "erkennungsmerkmale": k.get("erkennungsmerkmale", ""),
+        "abgrenzung": k.get("abgrenzung", ""),
+        "pflichtangaben": "\n".join(k.get("pflichtangaben") or []) if isinstance(k.get("pflichtangaben"), list)
+        else (k.get("pflichtangaben") or ""),
+        "nachfragen_wenn": k.get("nachfragen_wenn", ""),
+        "status": k.get("status", "entwurf"),
+    }
+    for feld, wert in werte.items():
+        st.session_state.setdefault(f"{praefix}_{feld}", wert)
+
+
+def zeige_kategorien():
+    meldung = st.session_state.pop("kategorie_meldung", None)
+    if meldung:
+        st.success(meldung, icon=":material/check_circle:")
+    darf = darf_kategorien_bearbeiten()
+    st.caption(
+        "Aktive Kategorien und ihre Beschreibungen fließen bei jeder Analyse in die Anweisungen an die KI ein. "
+        f"Aktuelle Prompt-Version: `{PROMPT_VERSION}` – sie ändert sich mit jeder Änderung hier, damit die "
+        "Auswertung vorher/nachher vergleichen kann."
+    )
+    if not darf:
+        st.info("Du kannst die Kategorien ansehen. Bearbeiten dürfen nur freigeschaltete Personen.",
+                icon=":material/lock:")
+
+    sichtbare = kat_sichtbar(KAT_STAND)
+    _tabelle([{
+        "Kategorie": k["name"],
+        "Status": "Aktiv" if k.get("status") == "aktiv" else "Entwurf",
+        "Art": "Standard" if k.get("standard") else "eigene",
+        "Version": k.get("version", 0),
+        "Zuletzt geändert": f"{zeitpunkt_de(k.get('zeitpunkt'))} {k.get('bearbeiter') or ''}".strip() or "–",
+    } for k in sichtbare.values()])
+
+    optionen = ([_NEU] if darf else []) + list(sichtbare)
+    if "kategorie_wahl_naechste" in st.session_state:  # nach dem Speichern: neue Kategorie auswählen
+        st.session_state["kategorie_wahl"] = st.session_state.pop("kategorie_wahl_naechste")
+    if st.session_state.get("kategorie_wahl") not in optionen:
+        st.session_state.pop("kategorie_wahl", None)
+    wahl = st.selectbox(
+        "Kategorie zum Ansehen/Bearbeiten",
+        optionen,
+        format_func=lambda key: "+ Neue Kategorie anlegen" if key == _NEU else sichtbare[key]["name"],
+        key="kategorie_wahl",
+    )
+    k = {} if wahl == _NEU else sichtbare[wahl]
+    standard = bool(k.get("standard"))
+    # Zähler im Schlüssel: nach dem Speichern frische Eingabefelder mit den gespeicherten Werten
+    praefix = f"kat_{wahl}_{st.session_state.setdefault('kategorie_generation', 0)}"
+    _kat_feld_init(praefix, k)
+
+    st.subheader("Neue Kategorie" if wahl == _NEU else k["name"])
+    st.text_input("Name der Kategorie", key=f"{praefix}_name", disabled=standard or not darf,
+                  help="Standard-Kategorien sind im Code verankert und behalten ihren Namen.")
+    st.text_area(
+        "Beschreibung der Buchhaltung (Freitext)",
+        key=f"{praefix}_beschreibung", height=180, disabled=not darf,
+        help="So, wie ihr es einem neuen Kollegen erklären würdet: Woran erkennt man den Beleg, was ist "
+             "wichtig, was ist Pflicht, wann soll nachgefragt werden?",
+    )
+
+    # Assistent: Freitext -> klare Regeln + Rückfragen (Vorschlag, wird erst mit "Speichern" übernommen)
+    if darf and st.button("Mit KI-Assistent in klare Regeln übersetzen", icon=":material/auto_awesome:",
+                          help=f"Modell: {MODEL_GROSS}. Füllt die Felder unten als Vorschlag aus."):
+        freitext = st.session_state[f"{praefix}_beschreibung"].strip()
+        if not freitext:
+            st.error("Bitte zuerst eine Beschreibung eingeben.")
+        else:
+            andere = {key: v for key, v in kat_aktiv(KAT_STAND).items() if key != wahl}
+            try:
+                with st.spinner("Assistent arbeitet …"):
+                    vorschlag = text_anfrage_json(
+                        ASSISTENT_PROMPT,
+                        assistent_nachricht(st.session_state[f"{praefix}_name"], freitext, andere),
+                    )
+            except Exception as e:
+                st.error(f"Assistent nicht erreichbar: {e}")
+            else:
+                for feld in ("erkennungsmerkmale", "abgrenzung", "nachfragen_wenn"):
+                    if vorschlag.get(feld):
+                        st.session_state[f"{praefix}_{feld}"] = str(vorschlag[feld])
+                pflicht = vorschlag.get("pflichtangaben")
+                if pflicht:
+                    st.session_state[f"{praefix}_pflichtangaben"] = (
+                        "\n".join(pflicht) if isinstance(pflicht, list) else str(pflicht))
+                st.session_state[f"{praefix}_rueckfragen"] = [str(r) for r in vorschlag.get("rueckfragen") or []]
+                st.rerun()
+
+    rueckfragen = st.session_state.get(f"{praefix}_rueckfragen")
+    if rueckfragen:
+        st.warning("**Rückfragen des Assistenten** – bitte in der Beschreibung klären:\n\n"
+                   + "\n".join(f"- {r}" for r in rueckfragen), icon=":material/help:")
+
+    st.markdown("**Regeln für die KI** (aus der Beschreibung abgeleitet, frei änderbar)")
+    st.text_area("Woran erkennt man die Kategorie?", key=f"{praefix}_erkennungsmerkmale", disabled=not darf)
+    st.text_area("Abgrenzung zu anderen Kategorien", key=f"{praefix}_abgrenzung", disabled=not darf)
+    st.text_area("Pflichtangaben auf dem Beleg (eine pro Zeile)", key=f"{praefix}_pflichtangaben",
+                 disabled=not darf, help="Fehlt eine davon auf dem Beleg, geht er zur Nachfrage.")
+    st.text_area("Wann muss nachgefragt werden?", key=f"{praefix}_nachfragen_wenn", disabled=not darf)
+    if not standard:
+        st.radio("Status", list(_KAT_STATUS), format_func=_KAT_STATUS.get, key=f"{praefix}_status",
+                 horizontal=True, disabled=not darf)
+
+    if darf:
+        spalte_speichern, spalte_loeschen = st.columns([1, 1])
+        if spalte_speichern.button("Speichern", type="primary", icon=":material/save:"):
+            _kategorie_sichern(wahl, k, praefix)
+        if not standard and wahl != _NEU:
+            with spalte_loeschen.popover("Löschen", icon=":material/delete:"):
+                st.write(f"„{k['name']}“ wirklich löschen? Sie wird nicht mehr verwendet. "
+                         "Frühere Versionen bleiben im Verlauf erhalten.")
+                if st.button("Ja, löschen", type="primary"):
+                    _kategorie_sichern(wahl, k, praefix, loeschen=True)
+
+    if wahl != _NEU:
+        with st.expander("So sieht die KI diese Kategorie"):
+            st.code(prompt_abschnitt({wahl: {**k, "status": "aktiv"}}), language=None)
+        with st.expander("Versionsverlauf"):
+            try:
+                verlauf = [v for v in kategorien_laden() if v.get("schluessel") == wahl]
+            except Exception as e:
+                st.error(f"Verlauf nicht ladbar: {e}")
+                verlauf = []
+            if verlauf:
+                _tabelle([{
+                    "Version": v.get("version"), "Zeitpunkt": zeitpunkt_de(v.get("zeitpunkt")),
+                    "Von": v.get("bearbeiter") or "–", "Status": v.get("status"),
+                    "Beschreibung": (v.get("beschreibung") or "")[:120],
+                } for v in reversed(verlauf)])
+            else:
+                st.caption("Noch nicht in der App geändert.")
+
+
+def _kategorie_sichern(wahl: str, k: dict, praefix: str, loeschen: bool = False) -> None:
+    ss = st.session_state
+    name = (k["name"] if k.get("standard") else ss[f"{praefix}_name"]).strip()
+    if not name:
+        st.error("Bitte einen Namen eingeben.")
+        return
+    schluessel = wahl
+    if wahl == _NEU:
+        schluessel = kat_schluessel(name)
+        if schluessel in KAT_STAND and KAT_STAND[schluessel].get("status") != "geloescht":
+            st.error(f"Eine Kategorie mit diesem Namen gibt es schon („{KAT_STAND[schluessel]['name']}“).")
+            return
+    eintrag = {
+        "schluessel": schluessel,
+        "name": name,
+        "status": "geloescht" if loeschen else ("aktiv" if k.get("standard") else ss[f"{praefix}_status"]),
+        "beschreibung": ss[f"{praefix}_beschreibung"].strip(),
+        "erkennungsmerkmale": ss[f"{praefix}_erkennungsmerkmale"].strip(),
+        "abgrenzung": ss[f"{praefix}_abgrenzung"].strip(),
+        "pflichtangaben": [z.strip() for z in ss[f"{praefix}_pflichtangaben"].splitlines() if z.strip()],
+        "nachfragen_wenn": ss[f"{praefix}_nachfragen_wenn"].strip(),
+        "version": int(KAT_STAND.get(schluessel, {}).get("version") or 0) + 1,
+        "bearbeiter": aktueller_benutzer(),
+    }
+    try:
+        kategorie_speichern(eintrag)
+    except Exception as e:
+        st.error(f"Speichern fehlgeschlagen: {e}")
+        return
+    hinweis = ""
+    try:  # lesbare Kopie im Drive – Fehler hier blockieren nicht
+        kategorie_dokument_ablegen(name, kat_dokument({**eintrag, "zeitpunkt": None}))
+    except Exception as e:
+        hinweis = f" (Dokument im Drive konnte nicht aktualisiert werden: {e})"
+    ss["kategorie_generation"] = ss.get("kategorie_generation", 0) + 1
+    if wahl == _NEU or loeschen:
+        ss["kategorie_wahl_naechste"] = _NEU if loeschen else schluessel
+    aktion = "gelöscht" if loeschen else f"gespeichert (Version {eintrag['version']}, {eintrag['status']})"
+    ss["kategorie_meldung"] = f"„{name}“ {aktion}.{hinweis}"
+    st.rerun()
+
+
+# ---------------------------------------------------------------------------
 # Seitenaufbau
 # ---------------------------------------------------------------------------
 
@@ -341,25 +910,33 @@ def _zustand_zuruecksetzen():
 
 
 st.title("Beleg-Klassifizierung – PoC")
-tab_analyse, tab_auswertung = st.tabs(["Beleg analysieren", "Auswertung"])
+tab_analyse, tab_nachfragen, tab_kategorien, tab_auswertung = st.tabs(
+    ["Beleg analysieren", "Nachfragen", "Kategorien", "Auswertung"]
+)
 
 with tab_analyse:
     st.caption(
-        "Lade einen Beleg hoch. Die KI ordnet ihn ein, extrahiert die Daten für den Bewirtungsbeleg "
-        "und weist auf Probleme hin. Danach bitte unten bewerten, was richtig erkannt wurde."
+        "Lade einen Beleg hoch. Die KI ordnet ihn ein (Bewirtung, Tanken, Übernachtung, ...), liest die Daten ab, "
+        "der Code rechnet nach. Unklare Belege landen automatisch unter „Nachfragen“. "
+        "Danach bitte unten bewerten, was richtig erkannt wurde."
     )
-    uploaded_file = st.file_uploader("Beleg hochladen (JPG, PNG, PDF)", type=["jpg", "jpeg", "png", "pdf"])
+    uploads = st.file_uploader(
+        "Beleg hochladen (JPG, PNG, PDF)",
+        type=["jpg", "jpeg", "png", "pdf"],
+        accept_multiple_files=True,
+        help="Mehrere Dateien werden als EIN Beleg gelesen, z. B. Rechnung + EC-Beleg oder mehrere Fotos "
+             f"einer langen Rechnung. Mehrseitige PDFs werden vollständig gelesen (bis {MAX_SEITEN} Seiten).",
+    )
 
-    if uploaded_file is None:
-        _zustand_zuruecksetzen()  # Datei entfernt -> alten Zustand verwerfen
+    if not uploads:
+        _zustand_zuruecksetzen()  # Dateien entfernt -> alten Zustand verwerfen
     else:
         erg = st.session_state.get("ergebnis")
-        if erg and erg["sha"] != datei_hash(uploaded_file.getvalue()):
-            _zustand_zuruecksetzen()  # andere Datei -> altes Ergebnis passt nicht mehr
+        if erg and erg["sha"] != beleg_hash(_dateien(uploads)):
+            _zustand_zuruecksetzen()  # andere Dateien -> altes Ergebnis passt nicht mehr
 
         if st.button("Beleg analysieren", type="primary"):
-            with st.spinner("Analysiere Beleg..."):
-                analyse_starten(uploaded_file)
+            analyse_starten(uploads)  # zeigt den Fortschritt selbst an (st.status)
 
     if "fehler" in st.session_state:
         meldung, raw = st.session_state["fehler"]
@@ -370,9 +947,18 @@ with tab_analyse:
     if "ergebnis" in st.session_state:
         zeige_ergebnis(st.session_state["ergebnis"])
 
+with tab_nachfragen:
+    zeige_nachfragen()
+
+with tab_kategorien:
+    zeige_kategorien()
+
 with tab_auswertung:
     zeige_auswertung()
 
 st.divider()
-st.caption(f"Proof of Concept · Modell `{MODEL}` · Prompt-Version `{PROMPT_VERSION}`")
+st.caption(
+    f"Proof of Concept · Modell `{MODEL}` (liest doppelt) · Schiedsrichter `{MODEL_GROSS}` · "
+    f"Prompt-Version `{PROMPT_VERSION}`"
+)
 

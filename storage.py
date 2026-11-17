@@ -5,6 +5,7 @@ Google Drive (Streamlit Cloud): aktiv, sobald in den Secrets [google_drive] mit 
 
     <ordner>/belege/<sha256[:16]>.<ext>        Originalbelege (Duplikate werden nicht doppelt abgelegt)
     <ordner>/feedback/<zeitpunkt>_<sha16>.json  eine Datei pro Bewertung (Drive kann nicht anhängen)
+    <ordner>/nachfragen/<zeitpunkt>_<sha16>.json  unsichere/unstimmige Belege, die ein Mensch klären muss
 
 Lokal (ohne [google_drive]): <Projekt>/data bzw. BELEG_DATENORDNER, mit Rechten 0700/0600.
 """
@@ -165,9 +166,9 @@ def _drive_json_laden(file_id: str) -> dict | None:
         return None
 
 
-@st.cache_data(ttl=300, show_spinner="Lade Feedback aus Google Drive...")
-def _drive_feedback_laden() -> list[dict]:
-    ordner = _unterordner_id("feedback")
+@st.cache_data(ttl=300, show_spinner="Lade Daten aus Google Drive...")
+def _drive_jsons_laden(ordnername: str) -> list[dict]:
+    ordner = _unterordner_id(ordnername)
     svc = _drive()
     dateien, token = [], None
     while True:
@@ -231,20 +232,21 @@ def beleg_speichern(file_bytes: bytes, dateiname: str, sha: str) -> str:
     return f"belege/{name}"
 
 
-def feedback_speichern(eintrag: dict) -> None:
+def _eintrag_speichern(art: str, eintrag: dict) -> None:
+    """art = "feedback" | "nachfragen". Drive: eine JSON-Datei pro Eintrag, lokal: <art>.jsonl."""
     eintrag = {"zeitpunkt": datetime.now().isoformat(timespec="seconds"), **eintrag}
     zeile = json.dumps(eintrag, ensure_ascii=False)
 
     if _drive_config():
         sha16 = (eintrag.get("datei_sha256") or "unbekannt")[:16]
         name = f"{eintrag['zeitpunkt'].replace(':', '-')}_{sha16}.json"
-        _drive_hochladen(_unterordner_id("feedback"), name, zeile.encode("utf-8"), "application/json")
-        _drive_feedback_laden.clear()  # Auswertung soll den neuen Eintrag sofort sehen
+        _drive_hochladen(_unterordner_id(art), name, zeile.encode("utf-8"), "application/json")
+        _drive_jsons_laden.clear()  # Anzeige soll den neuen Eintrag sofort sehen
         return
 
     ordner = _lokaler_ordner()
     _ordner_anlegen(ordner)
-    datei = ordner / "feedback.jsonl"
+    datei = ordner / f"{art}.jsonl"
     neu = not datei.exists()
     with datei.open("a", encoding="utf-8") as f:
         f.write(zeile + "\n")
@@ -252,11 +254,11 @@ def feedback_speichern(eintrag: dict) -> None:
         _rechte_setzen(datei)
 
 
-def feedback_laden() -> list[dict]:
+def _eintraege_laden(art: str) -> list[dict]:
     if _drive_config():
-        return _drive_feedback_laden()
+        return _drive_jsons_laden(art)
 
-    datei = _lokaler_ordner() / "feedback.jsonl"
+    datei = _lokaler_ordner() / f"{art}.jsonl"
     if not datei.exists():
         return []
     eintraege = []
@@ -271,5 +273,115 @@ def feedback_laden() -> list[dict]:
     return eintraege
 
 
+def feedback_speichern(eintrag: dict) -> None:
+    _eintrag_speichern("feedback", eintrag)
+
+
+def feedback_laden() -> list[dict]:
+    return _eintraege_laden("feedback")
+
+
 def schon_bewertet(sha: str) -> bool:
     return any(e.get("datei_sha256") == sha for e in feedback_laden())
+
+
+def nachfrage_speichern(eintrag: dict) -> bool:
+    """Legt einen Beleg zur Nachfrage ab. False, wenn derselbe Beleg (Hash) dort schon liegt."""
+    sha = eintrag.get("datei_sha256")
+    if sha and any(e.get("datei_sha256") == sha for e in nachfragen_laden()):
+        return False
+    _eintrag_speichern("nachfragen", eintrag)
+    return True
+
+
+def nachfragen_laden() -> list[dict]:
+    return _eintraege_laden("nachfragen")
+
+
+# Entscheidungen zu Nachfragen: nur anhängen, nie überschreiben (Protokoll: wer hat wann was entschieden).
+# Der aktuelle Status einer Nachfrage ist die jüngste Entscheidung zu ihrem Datei-Hash.
+
+def entscheidung_speichern(eintrag: dict) -> None:
+    _eintrag_speichern("entscheidungen", eintrag)
+
+
+def entscheidungen_laden() -> list[dict]:
+    return _eintraege_laden("entscheidungen")
+
+
+# Kategorien: jede Änderung ist eine neue Version (nur anhängen). Lesbare Kopie als Google-Doc
+# in "Anlage KI Assistent/<Kategorie>/" – dort, wo die Buchhaltung ihre Unterlagen bisher ablegt.
+
+ANLAGE_ORDNER = "Anlage KI Assistent"
+KATEGORIE_DOKUMENT = "Kategorie-Beschreibung (aus der App)"
+
+
+def kategorie_speichern(version: dict) -> None:
+    _eintrag_speichern("kategorien", version)
+
+
+def kategorien_laden() -> list[dict]:
+    return _eintraege_laden("kategorien")
+
+
+def _q(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _drive_ordner(eltern: str, name: str) -> str:
+    svc = _drive()
+    q = f"'{eltern}' in parents and name = '{_q(name)}' and mimeType = '{_ORDNER_MIME}' and trashed = false"
+    treffer = svc.files().list(q=q, fields="files(id)", pageSize=1, **_ALLE_ABLAGEN_LISTE).execute().get("files")
+    if treffer:
+        return treffer[0]["id"]
+    return svc.files().create(body={"name": name, "mimeType": _ORDNER_MIME, "parents": [eltern]},
+                              fields="id", **_ALLE_ABLAGEN).execute()["id"]
+
+
+def kategorie_dokument_ablegen(kategorie_name: str, text: str) -> str:
+    """Legt/aktualisiert das lesbare Dokument der Kategorie. Gibt einen Link bzw. Pfad zurück."""
+    if _drive_config():
+        from googleapiclient.http import MediaInMemoryUpload
+
+        ordner = _drive_ordner(_drive_ordner(_drive_config()["ordner_id"], ANLAGE_ORDNER), kategorie_name)
+        svc = _drive()
+        q = f"'{ordner}' in parents and name = '{_q(KATEGORIE_DOKUMENT)}' and trashed = false"
+        treffer = svc.files().list(q=q, fields="files(id)", pageSize=1, **_ALLE_ABLAGEN_LISTE).execute().get("files")
+        inhalt = MediaInMemoryUpload(text.encode("utf-8"), mimetype="text/plain")
+        if treffer:
+            datei = svc.files().update(fileId=treffer[0]["id"], media_body=inhalt, fields="id, webViewLink",
+                                       **_ALLE_ABLAGEN).execute()
+        else:  # text/plain -> wird von Drive in ein Google-Doc umgewandelt
+            datei = svc.files().create(
+                body={"name": KATEGORIE_DOKUMENT, "mimeType": "application/vnd.google-apps.document",
+                      "parents": [ordner]},
+                media_body=inhalt, fields="id, webViewLink", **_ALLE_ABLAGEN,
+            ).execute()
+        return datei.get("webViewLink", "")
+
+    ordner = _lokaler_ordner() / "kategorien"
+    _ordner_anlegen(ordner)
+    ziel = ordner / f"{kategorie_name}.txt"
+    ziel.write_text(text, encoding="utf-8")
+    _rechte_setzen(ziel)
+    return str(ziel)
+
+
+def beleg_laden(pfad: str) -> bytes:
+    """Originaldatei zu einem gespeicherten Pfad 'belege/<name>' laden."""
+    name = pfad.split("/")[-1]
+    if _drive_config():
+        return _drive_beleg_laden(name)
+    return (_lokaler_ordner() / "belege" / name).read_bytes()
+
+
+@st.cache_data(show_spinner=False, max_entries=50)
+def _drive_beleg_laden(name: str) -> bytes:
+    ordner = _unterordner_id("belege")
+    treffer = _drive().files().list(
+        q=f"'{ordner}' in parents and name = '{name}' and trashed = false",
+        fields="files(id)", pageSize=1, **_ALLE_ABLAGEN_LISTE,
+    ).execute().get("files", [])
+    if not treffer:
+        raise FileNotFoundError(f"Beleg {name} nicht im Ordner „belege“ gefunden.")
+    return _drive().files().get_media(fileId=treffer[0]["id"], **_ALLE_ABLAGEN).execute()

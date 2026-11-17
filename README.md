@@ -23,19 +23,39 @@ python test_logik.py   # Tests ohne API-Aufruf
 
 ## Aufbau
 
+**Wie gelesen, gerechnet und geprüft wird: siehe [PRUEFABLAUF.md](PRUEFABLAUF.md).**
+
 | Datei | Zweck |
 |---|---|
-| `App.py` | Nur Oberfläche. Tabs „Beleg analysieren“ (Upload → Ergebnis → Feedback) und „Auswertung“ |
+| `App.py` | Nur Oberfläche. Tabs „Beleg analysieren“ (Upload → Ergebnis → Feedback), „Nachfragen“ (prüfen, korrigieren, freigeben/zurückstellen/verwerfen), „Kategorien“ (anlegen/bearbeiten/löschen) und „Auswertung“ |
 | `prompts.py` | System-Prompt + `PROMPT_VERSION` |
-| `beleg_schema.py` | `KATEGORIEN`, `FEEDBACK_FELDER`, Pydantic-Modell `BelegAnalyse`, Parsing/Vergleich von Beträgen, Datum, Steuersätzen |
-| `extraction.py` | `MODEL`, Bildaufbereitung (PDF → Bilder, EXIF-Drehung, max. 2000 px, JPEG), API-Call, JSON-Extraktion |
+| `beleg_schema.py` | `KATEGORIEN`, `FEEDBACK_FELDER`, Pydantic-Modell `BelegAnalyse` (+ `Steuerzeile`), Parsing/Vergleich. **Summen (MwSt., Netto) und Trinkgeld rechnet der Code** in `_ableiten` |
+| `pipeline.py` | Ablauf einer Analyse: doppelt lesen (Original + Kontrast-Variante, parallel), vergleichen, bei Zweifel Schiedsrichter-Modell in höherer Auflösung |
+| `kategorien.py` | Kategorien aus der App: Versionen (nur anhängen), Standard + eigene, Prompt-Abschnitt, Fingerabdruck für die Prompt-Version, KI-Assistent (Freitext → Regeln + Rückfragen) |
+| `checks.py` | Rechenprüfungen (Steuerzeilen = Gesamtbetrag, MwSt. passt zum Satz, EC ≥ Rechnung, Datum) und `nachfragen_gruende` (Regeln, wann ein Mensch draufschauen muss) |
+| `extraction.py` | `MODEL`, Bildaufbereitung (PDF → Bilder, EXIF-Drehung, max. 2000 px bzw. 1600 px ab 6 Seiten, JPEG), mehrere Dateien = ein Beleg (`dateien_zu_bildern`, max. `MAX_SEITEN` = 20), API-Call, JSON-Extraktion |
 | `auth.py` | Google-Login über `st.login`, nur E-Mails aus `[zugang].erlaubte_emails`. Fail closed: ohne `[auth]` oder mit leerer Liste ist die App gesperrt |
-| `storage.py` | Ein gemeinsamer Ordner für alle Benutzer. Mit `[google_drive]`: Drive-Ordner `belege/` + `feedback/` (eine JSON-Datei pro Bewertung). Sonst lokal `data/` (bzw. `BELEG_DATENORDNER`): `feedback.jsonl` + `belege/`, Rechte 0700/0600 |
+| `storage.py` | Ein gemeinsamer Ordner für alle Benutzer. Mit `[google_drive]`: Drive-Ordner `belege/` + `feedback/` (eine JSON-Datei pro Bewertung). Dazu `nachfragen/`, `entscheidungen/`, `kategorien/` (alles nur anhängen) und lesbare Kategorie-Docs in `Anlage KI Assistent/<Kategorie>/`. Sonst lokal `data/` (bzw. `BELEG_DATENORDNER`): `feedback.jsonl`, `nachfragen.jsonl`, `belege/`, Rechte 0700/0600 |
 | `drive_token_holen.py` | Einmalig lokal: Refresh-Token für den Drive-Zugriff erzeugen und Ordnerzugriff prüfen |
-| `test_logik.py` | Assert-Tests für Parsing, Vergleich, JSON-Extraktion, Pydantic |
+| `test_logik.py` | Assert-Tests für Parsing, Vergleich, JSON-Extraktion, Pydantic, Ableitungen und Prüfungen (inkl. echter Fälle Domhof/Aral) |
 
-**Ablauf:** Upload → `datei_zu_bildern` → `analysieren` (OpenRouter) → `BelegAnalyse` →
-Ergebnis in `st.session_state["ergebnis"]` → Feedback-Formular → `feedback_speichern`.
+**Ablauf:** Upload → `datei_zu_bildern` → `analysieren` (OpenRouter, Modell liest nur ab) → `BelegAnalyse`
+(Code rechnet Summen/Trinkgeld) → `pruefen` + `nachfragen_gruende` → bei Gründen sofort `nachfrage_speichern`
+→ Ergebnis in `st.session_state["ergebnis"]` → Feedback-Formular → `feedback_speichern`.
+
+## Fachliche Vorgaben der Buchhaltung (Bewirtung)
+
+- Quittung muss **lesbar** sein, **Steuersatz** (7 % und/oder 19 %) ausweisen, **Datum** erkennbar.
+  **Bei Abweichungen immer einen Menschen fragen** → Tab/Ordner „Nachfragen“.
+- Wichtig: Belegnummer, Restaurantname, Belegdatum, Netto und Brutto.
+- Restaurant- + EC-Beleg: Differenz = Trinkgeld. Abgleich von Tag, Datum, Uhrzeit, Adresse, Name
+  (`ec_passt_zur_rechnung`).
+- Auf den Bewirtungsbeleg (Google-Doc „Bewirtungsbeleg“): Belegnummer, Restaurant, Bewirtungskosten brutto,
+  MwSt., Trinkgeld, Tag der Bewirtung. Zusätzlich manuell: Firmenadresse + Bewirtender (meist Simon Jäger
+  oder Asllan Ruko), bewirtete Personen (künftig aus dem Kalender), Anlass, Anlagen = „Quittungsbeleg
+  <Restaurant>, <Ort>“, Ort und Datum der Erstellung.
+- **Auslandsbelege:** abweichende Handhabe → immer Nachfrage (`ausland`).
+- Bewirtung strikt von **Tanken** und **Übernachtung** trennen (eigene Kategorien).
 
 ## Login (Google) und Ablage (Google Drive)
 
@@ -55,21 +75,37 @@ Cloud unter Settings → Secrets). Lokal ohne Login entwickeln: `LOGIN_DEAKTIVIE
 ## Wichtige Entscheidungen
 
 - **Modell:** `qwen/qwen3-vl-30b-a3b-instruct` über OpenRouter (offene Gewichte, später lokal
-  betreibbar). Kosten ca. 0,0006 $ pro Beleg. Alternativen: `qwen3-vl-8b-instruct`, `qwen3-vl-235b-a22b-instruct`.
+  betreibbar), liest jeden Beleg doppelt. **Schiedsrichter** bei Zweifel: `qwen3-vl-235b-a22b-instruct`
+  (Cloud). Ziel-Hardware lokal: **RTX 3090 (24 GB)** – dort passt nur das 30B-Modell (4-Bit ca. 18–19 GB),
+  also `SCHIEDSRICHTER_MODELL` auf das 30B-Modell setzen (liest dann nur in höherer Auflösung nach).
 - **Datenschutz:** `extra_body={"provider": {"data_collection": "deny"}}`, damit nur Anbieter ohne
   Datenspeicherung/Training genutzt werden. `data/` enthält echte Belege → nie committen.
 - **Session-State:** Streamlit führt das Skript bei jeder Eingabe neu aus. Das Ergebnis muss deshalb in
   `st.session_state` liegen, sonst verschwindet es beim ersten Klick im Feedback. Es wird verworfen,
   wenn sich der Datei-Hash ändert.
 - **Feste Kategorien** (`KATEGORIEN` in `beleg_schema.py`). Unbekannte Werte vom Modell → `sonstiger_beleg`.
-- **Keine doppelten Felder vom Modell:** Die Daten für den Bewirtungsbeleg leitet der Code
-  ab (`BelegAnalyse.bewirtungsdaten()`).
-- **Kein „Vertrauen“-Wert:** Vom LLM selbst geschätzte Werte sind nicht kalibriert.
+- **Das Modell rechnet nicht.** Es liest Gesamtbetrag, EC-Betrag und die MwSt.-Aufstellung pro Satz
+  (`steuerzeilen`) ab; MwSt.-/Netto-Summe und Trinkgeld (= EC − Rechnung) rechnet `BelegAnalyse._ableiten`.
+  Grund: Das Modell hat sich verrechnet (Domhof: MwSt. 11,40 statt 11,35, Brutto 144,80 statt 133,40).
+  Die Steuerzeilen erlauben eine Gegenprobe gegen den Gesamtbetrag (`checks.pruefen`).
+- **Keine echten Zahlen im Prompt-Beispiel**, nur Platzhalter – sonst kopiert das Modell sie
+  (erfundene Steuerzeile mit 5,59 € aus dem Beispiel).
+- **Kein „Vertrauen“-Wert:** Vom LLM selbst geschätzte Werte sind nicht kalibriert. Stattdessen
+  `kategorie_unsicher` + Begründung (ja/nein) und harte Prüfungen im Code.
+- **Nachfragen** werden direkt nach der Analyse abgelegt (unabhängig vom Feedback), einmal pro Datei-Hash.
 - **JSON-Parsing:** erst `response_format=json_object` (mit Fallback ohne), dann direkt parsen,
   Codeblock oder erstes `{…}`. Danach tolerante Pydantic-Validierung.
 - **Vergleich im Feedback** (`werte_gleich`): Beträge auf 0,005 genau, `0,00` = leer;
   Text ohne Groß-/Kleinschreibung und doppelte Leerzeichen; Datum in mehreren Formaten.
   Bei Steuersätzen ist das Komma ein **Trennzeichen** (`7,19` = 7 % und 19 %).
+- **Mehrere Dateien / Seiten = ein Beleg** (Rechnung + EC-Beleg, mehrseitige Hotelrechnung). Hash bei einer
+  Datei = Datei-Hash (wie bisher), bei mehreren = Hash über die Einzel-Hashes. Mehr als 20 Seiten → Nachfrage.
+- **Oberfläche deutsch formatiert** (`anzeige`, `datum_de`, `zeitpunkt_de`): 04.09.2026, 17.11.2026 16:20,
+  1.234,50 €. Gespeichert wird weiterhin ISO bzw. Zahl. Eingaben werden mit `parse_*` zurückgelesen.
+- **Barrierearm:** Prüfergebnisse als Wort („ja“/„nein“), nicht nur Farbe/Symbol; `st.table` statt
+  `st.dataframe` für die Ergebnis-Tabellen (HTML, Screenreader); Bildunterschriften als Alternativtext;
+  Formularfelder zeilenweise (Tab-Reihenfolge); keine gelben Texte (Kontrast); Akzentfarbe in
+  `.streamlit/config.toml`.
 - `import pymupdf` statt `import fitz` (veraltet). In Streamlit `width="stretch"` statt
   `use_container_width` (veraltet).
 
@@ -88,18 +124,21 @@ Erledigt:
 - [x] Feste Kategorien, gültiger Prompt, robustes Parsing, Pydantic
 - [x] Feedback pro Feld + Kategorie, Speicherung als JSONL, Auswertungs-Tab
 - [x] Tests ohne API, `requirements.txt`, `.gitignore`
+- [x] Google-Login, Ablage in Google Drive, öffentliche Datenschutzseite
+- [x] Modell liest nur ab, Code rechnet; Rechenprüfungen (`checks.py`); Beträge pro Steuersatz
+- [x] Kategorien Tankbeleg + Übernachtung, `kategorie_unsicher`, `ausland`, `ec_passt_zur_rechnung`
+- [x] Automatische Ablage unter „Nachfragen“
 
 Nicht getestet: echter Upload in der laufenden App mit echten Fotos/PDFs (nur synthetischer Beleg per API).
 
 ## Nächste Schritte
 
-1. **Rechenprüfungen im Code** (`checks.py`): Netto + MwSt. = Brutto (±0,02 €), Datum nicht in der
-   Zukunft bzw. nicht zu alt, EC-Betrag minus Rechnung = Trinkgeld.
-2. **Beträge pro Steuersatz** statt Summe: `[{satz, netto, steuer}]` (Speisen 7 %/19 %, Getränke 19 %).
-   Wird für sevDesk sowieso gebraucht.
+1. **Bewirtungsbeleg (Google-Doc) automatisch befüllen** aus den abgelesenen Daten + manuellen Angaben
+   (Anlass, Teilnehmer, Bewirtender) – siehe Vorgaben oben.
+2. **Nachfragen abarbeiten:** Status „erledigt“ + Korrektur direkt im Tab „Nachfragen“.
 3. **Pflichtangaben für Bewirtung** (mit Steuerberater klären): TSE-Daten / maschinelle Erstellung,
    Name des Bewirtenden ab 250 €. **Anlass + Teilnehmer** manuell in der Oberfläche erfassen.
 4. Mehrere Dateien auf einmal hochladen, HEIC-Support (Handyfotos), `st.cache_data` über Datei-Hash.
-5. Weitere Belegarten (Reisekosten, Tanken, Büromaterial) → Feld `belegart`.
+5. Weitere Belegarten (Parken, Bahn, Büromaterial) und eigene Ablesefelder für Tanken (Liter, Kraftstoff) und Übernachtung (Nächte, Frühstück getrennt).
 6. Datenmodell an **sevDesk-Voucher** ausrichten → Entwürfe per API anlegen.
 7. RAG über Kontierungsregeln und frühere Buchungen. Das gesammelte Feedback ist der Testdatensatz.

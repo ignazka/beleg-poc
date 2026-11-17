@@ -64,3 +64,11 @@ def aktueller_benutzer() -> str | None:
     if not _login_deaktiviert() and st.user.get("is_logged_in", False):
         return st.user.get("email")
     return None
+
+
+def darf_kategorien_bearbeiten() -> bool:
+    """[zugang].kategorien_bearbeiter = ["annika@..."] -> nur diese. Ohne Liste: alle angemeldeten Benutzer."""
+    liste = {e.strip().lower() for e in _secrets_abschnitt("zugang").get("kategorien_bearbeiter", []) if e.strip()}
+    if not liste:
+        return True
+    return (aktueller_benutzer() or "").lower() in liste

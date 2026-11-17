@@ -1,0 +1,6 @@
+# Oberfläche: kontraststarke Akzentfarbe (WCAG AA auf Weiß), sonst Streamlit-Standard (hell/dunkel nach System)
+[theme]
+primaryColor = "#1F4E9A"
+
+[client]
+toolbarMode = "viewer"
