@@ -367,6 +367,72 @@ def kategorie_dokument_ablegen(kategorie_name: str, text: str) -> str:
     return str(ziel)
 
 
+# Beispielbelege pro Kategorie: Unterordner von "Anlage KI Assistent" (wie bisher von der Buchhaltung gepflegt)
+
+_BEISPIEL_MIME = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+
+
+def _drive_ordner_finden(eltern: str, name: str) -> str | None:
+    q = f"'{eltern}' in parents and name = '{_q(name)}' and mimeType = '{_ORDNER_MIME}' and trashed = false"
+    treffer = _drive().files().list(q=q, fields="files(id)", pageSize=1, **_ALLE_ABLAGEN_LISTE).execute()
+    return (treffer.get("files") or [{}])[0].get("id")
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def anlage_ordner() -> list[str]:
+    """Namen der Unterordner von 'Anlage KI Assistent' (= Beispielordner der Kategorien)."""
+    if _drive_config():
+        anlage = _drive_ordner_finden(_drive_config()["ordner_id"], ANLAGE_ORDNER)
+        if not anlage:
+            return []
+        res = _drive().files().list(q=f"'{anlage}' in parents and mimeType = '{_ORDNER_MIME}' and trashed = false",
+                                    fields="files(name)", pageSize=200, **_ALLE_ABLAGEN_LISTE).execute()
+        return sorted(f["name"] for f in res.get("files", []))
+    basis = _lokaler_ordner() / "anlage"
+    return sorted(p.name for p in basis.iterdir() if p.is_dir()) if basis.exists() else []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def beispielbelege(ordner_name: str) -> list[dict]:
+    """[{name, mime, ref}] aller PDFs/Bilder im Beispielordner. ref = Drive-ID bzw. lokaler Pfad."""
+    if _drive_config():
+        anlage = _drive_ordner_finden(_drive_config()["ordner_id"], ANLAGE_ORDNER)
+        ordner = _drive_ordner_finden(anlage, ordner_name) if anlage else None
+        if not ordner:
+            return []
+        res = _drive().files().list(q=f"'{ordner}' in parents and trashed = false",
+                                    fields="files(id, name, mimeType)", orderBy="name", pageSize=500,
+                                    **_ALLE_ABLAGEN_LISTE).execute()
+        return [{"name": f["name"], "mime": f["mimeType"], "ref": f["id"]} for f in res.get("files", [])
+                if f["mimeType"] in _BEISPIEL_MIME.values()]
+    ordner = _lokaler_ordner() / "anlage" / ordner_name
+    if not ordner.exists():
+        return []
+    return [{"name": p.name, "mime": _BEISPIEL_MIME[p.suffix.lower()], "ref": str(p)}
+            for p in sorted(ordner.iterdir()) if p.suffix.lower() in _BEISPIEL_MIME]
+
+
+@st.cache_data(show_spinner=False, max_entries=100)
+def beispielbeleg_laden(ref: str) -> bytes:
+    if _drive_config():
+        return _drive().files().get_media(fileId=ref, **_ALLE_ABLAGEN).execute()
+    return Path(ref).read_bytes()
+
+
+def beispielbeleg_hochladen(ordner_name: str, name: str, inhalt: bytes, mime: str) -> None:
+    if _drive_config():
+        anlage = _drive_ordner(_drive_config()["ordner_id"], ANLAGE_ORDNER)
+        _drive_hochladen(_drive_ordner(anlage, ordner_name), name, inhalt, mime)
+    else:
+        ordner = _lokaler_ordner() / "anlage" / ordner_name
+        _ordner_anlegen(ordner.parent)
+        _ordner_anlegen(ordner)
+        (ordner / name).write_bytes(inhalt)
+        _rechte_setzen(ordner / name)
+    anlage_ordner.clear()
+    beispielbelege.clear()
+
+
 def beleg_laden(pfad: str) -> bytes:
     """Originaldatei zu einem gespeicherten Pfad 'belege/<name>' laden."""
     name = pfad.split("/")[-1]

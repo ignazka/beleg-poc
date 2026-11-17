@@ -239,4 +239,18 @@ assert '"parken"' in system_prompt(prompt_abschnitt(stand))
 assert any("Pflichtangaben laut Kategorie" in g for g in nachfragen_gruende(
     aral.model_copy(update={"fehlende_pflichtangaben": ["Mitarbeitername"]}), []))
 
+# Testlauf: Erwartung und Zusammenfassung
+from testlauf import Ergebnis, erwartete_kategorien, zusammenfassung  # noqa: E402
+
+assert erwartete_kategorien("restaurant_beleg") >= {"restaurant_beleg", "restaurant_mit_ec_beleg"}
+assert erwartete_kategorien("parken") == {"parken"}
+lauf = {
+    "a.pdf": {"vorher": Ergebnis("sonstiger_beleg", True, ["x"], "–", "–"),
+              "nachher": Ergebnis("parken", False, [], "3,00 €", "01.01.2026")},
+    "b.pdf": {"vorher": Ergebnis("parken", True, ["y"], "–", "–"),
+              "nachher": Ergebnis(None, True, [], "", "", "Timeout")},
+}
+assert zusammenfassung(lauf, "vorher", {"parken"}) == {"belege": 2, "erkannt": 1, "nachfragen": 2, "fehler": 0}
+assert zusammenfassung(lauf, "nachher", {"parken"}) == {"belege": 2, "erkannt": 1, "nachfragen": 1, "fehler": 1}
+
 print("Alle Logik-Tests bestanden.")

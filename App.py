@@ -9,6 +9,10 @@ from beleg_schema import FEEDBACK_FELDER, KATEGORIEN, BelegAnalyse, kategorien_r
 from datenschutz import ist_datenschutzseite, zeige_datenschutz
 from extraction import MAX_SEITEN, MODEL, MODEL_GROSS, AnalyseFehler, dateien_zu_bildern, text_anfrage_json
 from pipeline import beleg_lesen
+from testlauf import MAX_BELEGE as MAX_TESTBELEGE
+from testlauf import ausfuehren as testlauf_ausfuehren
+from testlauf import erwartete_kategorien
+from testlauf import zusammenfassung as testlauf_zusammenfassung
 from kategorien import ASSISTENT_PROMPT, aktueller_stand, assistent_nachricht, labels, prompt_abschnitt, wissens_hash
 from kategorien import aktiv as kat_aktiv
 from kategorien import als_dokument as kat_dokument
@@ -25,6 +29,10 @@ from storage import (
     beleg_laden,
     entscheidung_speichern,
     entscheidungen_laden,
+    anlage_ordner,
+    beispielbeleg_hochladen,
+    beispielbeleg_laden,
+    beispielbelege,
     kategorie_dokument_ablegen,
     kategorie_speichern,
     kategorien_laden,
@@ -857,6 +865,146 @@ def zeige_kategorien():
             else:
                 st.caption("Noch nicht in der App geändert.")
 
+    if darf:
+        _zeige_testlauf(wahl, k, praefix)
+
+
+def _kategorie_aus_formular(schluessel: str, name: str, praefix: str) -> dict:
+    ss = st.session_state
+    return {
+        "schluessel": schluessel,
+        "name": name,
+        "beschreibung": ss[f"{praefix}_beschreibung"].strip(),
+        "erkennungsmerkmale": ss[f"{praefix}_erkennungsmerkmale"].strip(),
+        "abgrenzung": ss[f"{praefix}_abgrenzung"].strip(),
+        "pflichtangaben": [z.strip() for z in ss[f"{praefix}_pflichtangaben"].splitlines() if z.strip()],
+        "nachfragen_wenn": ss[f"{praefix}_nachfragen_wenn"].strip(),
+    }
+
+
+def _standard_ordner(name: str, ordner: list[str]) -> int:
+    """Index des Beispielordners, der am besten zum Kategorienamen passt (gleiches erstes Wort)."""
+    wort = name.split(":")[-1].split()[0].lower() if name.strip() else ""
+    for i, o in enumerate(ordner):
+        if o.lower() == name.lower():
+            return i
+    for i, o in enumerate(ordner):
+        if wort and wort[:6] in o.lower():
+            return i
+    return 0
+
+
+def _zeige_testlauf(wahl: str, k: dict, praefix: str) -> None:
+    st.subheader("Testlauf mit Beispielbelegen")
+    st.caption(
+        "Analysiert die Beispielbelege aus „Anlage KI Assistent/<Ordner>“ zweimal: mit dem gespeicherten Stand "
+        "und mit dem Stand oben im Formular (auch ungespeichert). So siehst du vor dem Aktivieren, ob die "
+        "Änderung hilft. Kosten: unter 0,1 Cent pro Beleg und Durchlauf."
+    )
+    name = (k.get("name") or st.session_state.get(f"{praefix}_name", "")).strip()
+    try:
+        ordner = anlage_ordner()
+    except Exception as e:
+        st.error(f"Beispielordner nicht ladbar: {e}")
+        return
+    neuer = f"Neuer Ordner: {name}" if name and name not in ordner else None
+    optionen = ordner + ([neuer] if neuer else [])
+    if not optionen:
+        st.info("Bitte zuerst einen Namen für die Kategorie eingeben.")
+        return
+    gewaehlt = st.selectbox("Beispielordner", optionen, index=_standard_ordner(name, ordner) if ordner else 0,
+                            key=f"{praefix}_testordner")
+    ordnername = name if gewaehlt == neuer else gewaehlt
+    belege = beispielbelege(ordnername) if gewaehlt != neuer else []
+    st.caption(f"{len(belege)} Beispielbeleg(e) im Ordner „{ordnername}“"
+               + (f" – getestet werden die ersten {MAX_TESTBELEGE}." if len(belege) > MAX_TESTBELEGE else "."))
+
+    neue = st.file_uploader("Beispielbelege hinzufügen", type=["pdf", "jpg", "jpeg", "png"],
+                            accept_multiple_files=True, key=f"{praefix}_testupload")
+    if neue and st.button(f"{len(neue)} Datei(en) in „{ordnername}“ hochladen", icon=":material/upload:"):
+        try:
+            for datei in neue:
+                beispielbeleg_hochladen(ordnername, datei.name, datei.getvalue(), datei.type)
+        except Exception as e:
+            st.error(f"Hochladen fehlgeschlagen: {e}")
+        else:
+            st.session_state["kategorie_meldung"] = f"{len(neue)} Beispielbeleg(e) in „{ordnername}“ abgelegt."
+            st.session_state["kategorie_generation"] = st.session_state.get("kategorie_generation", 0) + 1
+            st.rerun()
+
+    if not belege:
+        return
+    if st.button("Testlauf starten (vorher / nachher)", type="primary", icon=":material/science:"):
+        schluessel = wahl if wahl != _NEU else kat_schluessel(name)
+        entwurf = {**KAT_STAND, schluessel: {**KAT_STAND.get(schluessel, {}),
+                                             **_kategorie_aus_formular(schluessel, name, praefix),
+                                             "status": "aktiv", "standard": bool(k.get("standard"))}}
+        nachher = system_prompt(prompt_abschnitt(entwurf))
+        varianten = {"vorher": SYSTEM_PROMPT_AKTUELL, "nachher": nachher}
+        if nachher == SYSTEM_PROMPT_AKTUELL:
+            varianten = {"nachher": nachher}  # nichts geändert -> nur ein Durchlauf
+        auswahl = belege[:MAX_TESTBELEGE]
+        kategorien_registrieren({**labels(KAT_STAND), schluessel: name})  # neue Kategorie für den Test gültig
+        balken = st.progress(0.0, text="Testlauf läuft …")
+        try:
+            daten = [(b["name"], beispielbeleg_laden(b["ref"]), b["mime"]) for b in auswahl]
+            ergebnisse = testlauf_ausfuehren(
+                daten, varianten,
+                fortschritt=lambda f, g: balken.progress(f / g, text=f"Testlauf: {f} von {g} Analysen fertig"),
+            )
+        except Exception as e:
+            st.error(f"Testlauf fehlgeschlagen: {e}")
+            return
+        finally:
+            kategorien_registrieren(labels(KAT_STAND))
+        balken.empty()
+        st.session_state[f"testlauf_{wahl}"] = {"ergebnisse": ergebnisse, "varianten": list(varianten),
+                                                "erwartet": erwartete_kategorien(schluessel), "name": name}
+
+    ergebnis = st.session_state.get(f"testlauf_{wahl}")
+    if ergebnis:
+        _zeige_testergebnis(ergebnis)
+
+
+def _zeige_testergebnis(t: dict) -> None:
+    ergebnisse, varianten, erwartet = t["ergebnisse"], t["varianten"], t["erwartet"]
+    spalten = st.columns(len(varianten))
+    for spalte, v in zip(spalten, varianten):
+        z = testlauf_zusammenfassung(ergebnisse, v, erwartet)
+        titel = {"vorher": "Gespeicherter Stand", "nachher": "Stand im Formular"}[v]
+        spalte.markdown(f"**{titel}**")
+        spalte.markdown(
+            f"- Als „{t['name']}“ erkannt: **{z['erkannt']} von {z['belege']}**\n"
+            f"- Zur Nachfrage: **{z['nachfragen']} von {z['belege']}**"
+            + (f"\n- Fehler: **{z['fehler']}**" if z["fehler"] else "")
+        )
+
+    def zelle(e) -> str:
+        if e is None:
+            return "–"
+        if e.fehler:
+            return f"Fehler: {e.fehler[:60]}"
+        treffer = "✓" if e.kategorie in erwartet else "✗"
+        return (f"{treffer} {_kategorie_label(e.kategorie)} · {e.betrag} · "
+                f"{'Nachfrage' if e.nachfrage else 'ok'}")
+
+    zeilen = []
+    for name, je_variante in ergebnisse.items():
+        zeile = {"Beleg": name}
+        for v in varianten:
+            zeile[{"vorher": "Vorher", "nachher": "Nachher"}[v]] = zelle(je_variante.get(v))
+        if len(varianten) == 2:
+            a, b = je_variante.get("vorher"), je_variante.get("nachher")
+            geaendert = a and b and (a.kategorie != b.kategorie or a.nachfrage != b.nachfrage)
+            zeile["Änderung"] = "geändert" if geaendert else "–"
+        zeilen.append(zeile)
+    _tabelle(zeilen)
+    with st.expander("Nachfragegründe im Detail"):
+        for name, je_variante in ergebnisse.items():
+            for v, e in je_variante.items():
+                if e.gruende:
+                    st.markdown(f"**{name}** ({v}): " + "; ".join(e.gruende))
+
 
 def _kategorie_sichern(wahl: str, k: dict, praefix: str, loeschen: bool = False) -> None:
     ss = st.session_state
@@ -871,14 +1019,8 @@ def _kategorie_sichern(wahl: str, k: dict, praefix: str, loeschen: bool = False)
             st.error(f"Eine Kategorie mit diesem Namen gibt es schon („{KAT_STAND[schluessel]['name']}“).")
             return
     eintrag = {
-        "schluessel": schluessel,
-        "name": name,
+        **_kategorie_aus_formular(schluessel, name, praefix),
         "status": "geloescht" if loeschen else ("aktiv" if k.get("standard") else ss[f"{praefix}_status"]),
-        "beschreibung": ss[f"{praefix}_beschreibung"].strip(),
-        "erkennungsmerkmale": ss[f"{praefix}_erkennungsmerkmale"].strip(),
-        "abgrenzung": ss[f"{praefix}_abgrenzung"].strip(),
-        "pflichtangaben": [z.strip() for z in ss[f"{praefix}_pflichtangaben"].splitlines() if z.strip()],
-        "nachfragen_wenn": ss[f"{praefix}_nachfragen_wenn"].strip(),
         "version": int(KAT_STAND.get(schluessel, {}).get("version") or 0) + 1,
         "bearbeiter": aktueller_benutzer(),
     }

@@ -206,6 +206,23 @@ Auswertung, ob eine geänderte Beschreibung die Trefferquote verbessert oder ver
 Nachtrainieren des Modells lohnt sich erst mit einigen hundert geprüften Belegen. Diese sammeln
 Feedback und Freigaben gerade.
 
+### Testlauf vor dem Aktivieren
+
+Datei: `testlauf.py`, `App.py` (`_zeige_testlauf`)
+
+Im Tab „Kategorien“ gibt es pro Kategorie einen **Testlauf mit Beispielbelegen**. Die Beispielbelege
+liegen im passenden Ordner unter `Anlage KI Assistent/` (z. B. „Bewirtungsbeleg Deutschland“). Neue
+Beispiele lassen sich direkt in der App hochladen.
+
+Jeder Beispielbeleg wird zweimal komplett analysiert (doppelt lesen, Prüfungen, ggf. Schiedsrichter):
+
+- **vorher**: mit dem gespeicherten Kategorie-Wissen
+- **nachher**: mit dem Stand im Formular, auch wenn er noch nicht gespeichert ist
+
+Ergebnis pro Variante: Wie viele Belege wurden als diese Kategorie erkannt? (Bewirtungs-Unterarten
+zählen gegenseitig.) Wie viele müssten zur Nachfrage? Dazu eine Tabelle pro Beleg mit „geändert“-Markierung.
+Gespeichert wird beim Testlauf **nichts**. Höchstens 15 Belege pro Lauf, 4 parallel.
+
 ## 10. Feedback und Messung
 
 Datei: `App.py`
