@@ -5,7 +5,9 @@ Sicher per Voreinstellung ("fail closed"):
 - Reinkommen nur E-Mails aus [zugang].erlaubte_emails. Leere oder fehlende Liste = niemand.
 """
 
+import html
 import os
+import re
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -41,7 +43,9 @@ def login_erzwingen() -> None:
         st.stop()
 
     if not st.user.get("is_logged_in", False):
-        st.title("Beleg-Klassifizierung – PoC")
+        from marke import kopfzeile  # spät importiert: auth soll ohne Assets lauffähig bleiben
+
+        kopfzeile()
         st.write("Bitte mit deinem Google-Konto anmelden.")
         st.button("Mit Google anmelden", type="primary", on_click=st.login)
         st.markdown("[Datenschutzerklärung](?seite=datenschutz)")
@@ -54,9 +58,36 @@ def login_erzwingen() -> None:
         st.stop()
 
     with st.sidebar:
-        st.write(f"Angemeldet als **{st.user.get('name') or email}**")
-        st.caption(email)
+        st.markdown(benutzer_karte(st.user.get("name") or email, email, st.user.get("picture")),
+                    unsafe_allow_html=True)
         st.button("Abmelden", on_click=st.logout)
+
+
+def _initialen(name: str) -> str:
+    teile = [t for t in re.split(r"[\s.@_-]+", name) if t]
+    return "".join(t[0] for t in teile[:2]).upper() or "?"
+
+
+def benutzer_karte(name: str, email: str, bild_url: str | None) -> str:
+    """'Angemeldet als' mit rundem Google-Profilbild (oder Initialen, falls keins vorhanden)."""
+    n, e = html.escape(name), html.escape(email)
+    if bild_url and bild_url.startswith("https://"):
+        avatar = (f'<img src="{html.escape(bild_url, quote=True)}" alt="Profilbild von {n}" '
+                  'referrerpolicy="no-referrer" style="width:40px;height:40px;border-radius:50%;'
+                  'object-fit:cover;flex-shrink:0">')
+    else:
+        avatar = ('<div aria-hidden="true" style="width:40px;height:40px;border-radius:50%;flex-shrink:0;'
+                  'background:#C25100;color:#fff;display:flex;align-items:center;justify-content:center;'
+                  f'font-weight:700">{html.escape(_initialen(name))}</div>')
+    return (
+        '<div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem">'
+        f"{avatar}"
+        '<div style="line-height:1.3;min-width:0">'
+        f'<div style="font-size:.85rem;opacity:.8">Angemeldet als</div>'
+        f'<div style="font-weight:700;overflow-wrap:anywhere">{n}</div>'
+        f'<div style="font-size:.85rem;opacity:.8;overflow-wrap:anywhere">{e}</div>'
+        "</div></div>"
+    )
 
 
 def aktueller_benutzer() -> str | None:

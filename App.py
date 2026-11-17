@@ -1,4 +1,4 @@
-"""Beleg-Klassifizierung PoC – Upload, Analyse, Feedback."""
+"""Praktikant-AI (RE-ALIS) – Belege analysieren, Nachfragen, Kategorien, Auswertung."""
 
 import csv
 import io
@@ -17,6 +17,7 @@ from testlauf import MAX_BELEGE as MAX_TESTBELEGE
 from testlauf import ausfuehren as testlauf_ausfuehren
 from testlauf import erwartete_kategorien
 from testlauf import zusammenfassung as testlauf_zusammenfassung
+from marke import APP_NAME, kopfzeile
 from kategorien import ASSISTENT_PROMPT, aktueller_stand, assistent_nachricht, labels, prompt_abschnitt, wissens_hash
 from kategorien import aktiv as kat_aktiv
 from kategorien import als_dokument as kat_dokument
@@ -49,7 +50,7 @@ from storage import (
 _ASSETS = Path(__file__).parent / "assets"
 if not _ASSETS.exists():  # z. B. wenn App.py aus einem anderen Ordner ausgeführt wird
     _ASSETS = Path.cwd() / "assets"
-st.set_page_config(page_title="Beleg-Klassifizierung – RE-ALIS", page_icon=str(_ASSETS / "realis-symbol.svg"),
+st.set_page_config(page_title=f"{APP_NAME} – RE-ALIS", page_icon=str(_ASSETS / "realis-symbol.svg"),
                    layout="wide")
 st.logo(str(_ASSETS / "realis-logo.svg"), icon_image=str(_ASSETS / "realis-symbol.svg"), size="large")
 
@@ -876,53 +877,41 @@ def _kat_feld_init(praefix: str, k: dict) -> None:
 
 def zeige_kategorien():
     meldung = st.session_state.pop("kategorie_meldung", None)
-    if meldung:
-        st.success(meldung, icon=":material/check_circle:")
+    if meldung:  # als Einblendung, damit die Auswahl ganz oben bleibt
+        st.toast(meldung, icon=":material/check_circle:")
     darf = darf_kategorien_bearbeiten()
     ss = st.session_state
-    st.subheader(
-        "Kategorien",
-        help="Aktive Kategorien und ihre Beschreibungen fließen bei jeder Analyse in die Anweisungen an die KI "
-             f"ein. Jede Änderung hier ändert die Prompt-Version (aktuell `{PROMPT_VERSION}`), damit die "
-             "Auswertung vorher und nachher vergleichen kann.\n\nKlicke auf eine Zeile, um eine Kategorie "
-             "anzusehen oder zu bearbeiten.",
+    st.caption(
+        "Hier legt ihr fest, welche Belegarten die KI kennt und woran sie sie erkennt. Aktive Kategorien und ihre "
+        "Beschreibungen fließen bei jeder Analyse in die Anweisungen an die KI ein. Jede Änderung bekommt eine "
+        f"neue Prompt-Version (aktuell `{PROMPT_VERSION}`), damit die Auswertung vorher und nachher vergleichen kann."
     )
     if not darf:
         st.caption(":material/lock: Nur ansehen – bearbeiten dürfen freigeschaltete Personen.")
 
     sichtbare = kat_sichtbar(KAT_STAND)
-    schluessel = list(sichtbare) + ([_NEU] if darf else [])
-    zeilen = [{
-        "Kategorie": k["name"],
-        "Status": "Aktiv" if k.get("status") == "aktiv" else "Entwurf",
-        "Art": "Standard" if k.get("standard") else "eigene",
-        "Version": k.get("version", 0),
-        "Zuletzt geändert": f"{zeitpunkt_de(k.get('zeitpunkt'))} {k.get('bearbeiter') or ''}".strip() or "–",
-    } for k in sichtbare.values()]
-    if darf:
-        zeilen.append({"Kategorie": "+ Neue Kategorie anlegen", "Status": "", "Art": "", "Version": None,
-                       "Zuletzt geändert": ""})
+    optionen = list(sichtbare)
+    # Auswahl im Code ändern (nach Speichern/Löschen) geht nur vor dem Zeichnen der Auswahlliste
+    if "kategorie_wahl_naechste" in ss:
+        naechste = ss.pop("kategorie_wahl_naechste")
+        if naechste in optionen:
+            ss["kategorie_wahl"] = naechste
+    if ss.get("kategorie_wahl") not in optionen:
+        ss.pop("kategorie_wahl", None)
 
-    # Klickbare Tabelle. Die gewählte Kategorie merken wir uns selbst ("kategorie_aktiv"), damit sie nach dem
-    # Speichern erhalten bleibt; der Tabellen-Schlüssel wechselt dann, damit keine alte Markierung stört.
-    ereignis = st.dataframe(
-        zeilen,
-        hide_index=True,
-        width="stretch",
-        on_select="rerun",
-        selection_mode="single-row",
-        key=f"kategorie_tabelle_{ss.setdefault('kategorie_tabelle_gen', 0)}",
-        column_config={"Version": st.column_config.NumberColumn(format="%d")},
+    spalte_liste, spalte_neu = st.columns([3, 1], vertical_alignment="bottom")
+    auswahl = spalte_liste.selectbox(
+        "Kategorie",
+        optionen,
+        format_func=lambda key: f"{sichtbare[key]['name']}"
+        + ("" if sichtbare[key].get("status") == "aktiv" else " (Entwurf)"),
+        key="kategorie_wahl",
+        on_change=lambda: ss.pop("kategorie_neu_modus", None),  # Auswahl beendet "neu anlegen"
+        label_visibility="collapsed",  # unsichtbar, bleibt aber für Screenreader als Name der Liste erhalten
     )
-    zeile = ereignis.selection.rows[0] if ereignis.selection.rows else None
-    angeklickt = schluessel[zeile] if zeile is not None and zeile < len(schluessel) else None
-    if angeklickt != ss.get("kategorie_tabelle_letzte"):
-        ss["kategorie_tabelle_letzte"] = angeklickt
-        ss["kategorie_aktiv"] = angeklickt
-    wahl = ss.get("kategorie_aktiv")
-    if wahl not in schluessel:
-        st.caption("Klicke auf eine Kategorie in der Tabelle, um sie anzusehen oder zu bearbeiten.")
-        return
+    if darf and spalte_neu.button("Neue Kategorie", icon=":material/add:", type="primary", width="stretch"):
+        ss["kategorie_neu_modus"] = True
+    wahl = _NEU if darf and ss.get("kategorie_neu_modus") else auswahl
     k = {} if wahl == _NEU else sichtbare[wahl]
     standard = bool(k.get("standard"))
     # Zähler im Schlüssel: nach dem Speichern frische Eingabefelder mit den gespeicherten Werten
@@ -1030,11 +1019,10 @@ def zeige_kategorien():
 
 
 def _kategorie_auswahl_setzen(schluessel_neu: str | None) -> None:
-    """Auswahl im Code ändern (nach Speichern/Löschen/Abbrechen): Tabelle neu aufbauen, eigene Auswahl setzen."""
+    """Auswahl im Code ändern (nach Speichern/Löschen/Abbrechen); wird vor dem nächsten Zeichnen übernommen."""
     ss = st.session_state
-    ss["kategorie_aktiv"] = schluessel_neu
-    ss["kategorie_tabelle_letzte"] = None
-    ss["kategorie_tabelle_gen"] = ss.get("kategorie_tabelle_gen", 0) + 1
+    ss["kategorie_wahl_naechste"] = schluessel_neu
+    ss.pop("kategorie_neu_modus", None)
 
 
 @st.dialog("Probelauf: Hilft meine Änderung?", width="large")
@@ -1301,7 +1289,7 @@ def _offene_nachfragen() -> int | None:
         return None
 
 
-st.title("Beleg-Klassifizierung")
+kopfzeile()
 _offen = _offene_nachfragen()
 tab_analyse, tab_nachfragen, tab_kategorien, tab_auswertung = st.tabs([
     ":material/upload_file: Beleg analysieren",

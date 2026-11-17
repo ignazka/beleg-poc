@@ -253,4 +253,12 @@ lauf = {
 assert zusammenfassung(lauf, "vorher", {"parken"}) == {"belege": 2, "erkannt": 1, "nachfragen": 2, "fehler": 0}
 assert zusammenfassung(lauf, "nachher", {"parken"}) == {"belege": 2, "erkannt": 1, "nachfragen": 1, "fehler": 1}
 
+# Profilbild in der Seitenleiste (Google-Avatar, sonst Initialen; Namen werden HTML-sicher eingesetzt)
+from auth import benutzer_karte  # noqa: E402
+
+karte = benutzer_karte("Philipp <b>", "p@x.de", "https://lh3.googleusercontent.com/a/abc=s96-c")
+assert "&lt;b&gt;" in karte and "<b>" not in karte and 'referrerpolicy="no-referrer"' in karte
+assert ">AW</div>" in benutzer_karte("Annika Wahl", "a@x.de", None)
+assert "javascript" not in benutzer_karte("X", "x@x.de", "javascript:alert(1)")
+
 print("Alle Logik-Tests bestanden.")

@@ -214,7 +214,7 @@ Feedback und Freigaben gerade.
 
 Datei: `testlauf.py`, `App.py` (`_zeige_testlauf`)
 
-Im Tab „Kategorien“ öffnet der Button **„Testen“** (unter dem Formular einer Kategorie) ein Fenster mit dem **Probelauf mit Beispielbelegen**. Kategorien wählt man per Klick auf ihre Zeile in der Tabelle; die letzte Zeile „+ Neue Kategorie anlegen“ legt eine neue an. Die Beispielbelege
+Im Tab „Kategorien“ öffnet der Button **„Testen“** (unter dem Formular einer Kategorie) ein Fenster mit dem **Probelauf mit Beispielbelegen**. Kategorien wählt man ganz oben in der Auswahlliste; der Button „Neue Kategorie“ daneben legt eine neue an. Die Beispielbelege
 liegen im passenden Ordner unter `Anlage KI Assistent/` (z. B. „Bewirtungsbeleg Deutschland“). Neue
 Beispiele lassen sich direkt in der App hochladen.
 
