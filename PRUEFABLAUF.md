@@ -266,6 +266,11 @@ Datei: `App.py`
 Nach jeder Analyse kann ein Mensch jedes Feld bestätigen oder korrigieren. Gespeichert werden das
 Ergebnis, alle Lesungen (welches Modell was gelesen hat), die Umdeutungen und die Korrekturen.
 
+Die **Belegart wird ausdrücklich abgefragt**: „Stimmt die Belegart „…“? Ja / Nein“, nichts ist
+vorausgewählt; bei „Nein“ wählt man die richtige. Ohne Antwort lässt sich nicht speichern. (Vorher war die
+KI-Kategorie vorausgewählt – wer sie nicht umstellte, bestätigte sie, auch wenn im Kommentar das Gegenteil
+stand.)
+
 Der Tab **„Auswertung“** (`zeige_auswertung`) zählt jeden bewerteten Beleg **einmal** (jüngste Bewertung
 pro Datei-Hash), aus Feedback und korrigierten Nachfragen:
 
@@ -279,9 +284,16 @@ Dazu Trefferquote pro Feld und pro Belegart, die Verwechslungen und ein Hinweis,
 Belegart eine **neu angelegte Kategorie** betrifft (die KI kannte sie bei der Analyse evtl. noch nicht).
 Filter nach Prompt-Version und Modell sind aufklappbar.
 
-**Bewertete Belege durchsehen:** Filter „Alle / Fehlerfrei / Mit Korrekturen“, Beleg auswählen. Links das
-Original, rechts jedes Feld mit „KI hat gelesen“ und „Richtig ist“ – grün = stimmte, rot = korrigiert –
-plus Bewerter, Quelle (Feedback oder Nachfrage-Freigabe), Modell, Prompt-Version und Kommentar.
+**Bewertete Belege durchsehen:** Filter „Alle / Fehlerfrei / Mit Korrekturen / Mit Kommentar“, Beleg
+auswählen. Links das Original (Klick aufs Bild oder „Größer ansehen“ öffnet alle Seiten groß), rechts jedes
+Feld mit „KI hat gelesen“ und „Richtig ist“ – grün = stimmte, rot = korrigiert – plus Bewerter, Quelle
+(Feedback oder Nachfrage-Korrektur), Modell, Prompt-Version und Kommentar.
+
+**Bewertung korrigieren:** Stimmt eine Bewertung nicht (z. B. Kommentar „Zimmerbuchung nicht erkannt“, aber
+Belegart als richtig gezählt), legt „Bewertung korrigieren“ eine **neue** Bewertung an: Belegart-Frage,
+Felder (vorbelegt mit den bisher richtigen Werten, verglichen wird immer mit der KI-Lesung) und Pflicht-
+Begründung. Die jüngste Bewertung zählt; die alte bleibt erhalten (`korrektur_von`, `kommentar_vorher`).
+Der Filter „Mit Kommentar“ hilft, solche Fälle zu finden.
 
 ## Was nicht abgesichert ist
 

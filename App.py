@@ -1,6 +1,7 @@
 """Praktikant-AI (RE-ALIS) – Belege analysieren, Nachfragen, Kategorien, Auswertung."""
 
 from datetime import datetime
+from types import SimpleNamespace
 import csv
 import html
 import io
@@ -370,11 +371,14 @@ def _beleg_vorschau(bilder: list[bytes], titel: str, key: str) -> None:
         spalten = st.columns(min(n, _VORSCHAU_SEITEN)) if n > 1 else [st]
         for spalte, bild in zip(spalten, bilder):
             spalte.image(bild)
+        # unsichtbarer Button über dem ganzen Bild (CSS): Klick aufs Bild öffnet die große Ansicht
+        bild_klick = st.button("Beleg vergrößern", key=f"bildklick_{key}")
     if n > _VORSCHAU_SEITEN:
         st.caption(f"{n} Seiten – {n - _VORSCHAU_SEITEN} weitere in der großen Ansicht")
     elif n > 1:
         st.caption(f"{n} Seiten")
-    if st.button("Größer ansehen", icon=":material/zoom_in:", key=f"gross_{key}"):
+    knopf = st.button("Größer ansehen", icon=":material/zoom_in:", key=f"gross_{key}")
+    if bild_klick or knopf:
         _beleg_gross(bilder, titel)
 
 
@@ -527,6 +531,28 @@ def _felder_auswerten(analyse, korrekturen: dict[str, str]):
     return felder, ungueltig
 
 
+def _belegart_frage(ki_kat: str, key: str, richtig: bool | None = None, korrekt: str | None = None) -> str | None:
+    """Ausdrückliche Frage „Stimmt die Belegart?“ – nichts ist vorausgewählt, damit niemand die KI-Antwort
+    versehentlich bestätigt. -> richtige Belegart oder None (noch nicht beantwortet). Außerhalb von st.form."""
+    namen = kat_auswahl(KAT_STAND)  # auch Entwürfe: neu angelegte Kategorien sofort wählbar
+    antwort = st.radio(
+        f"Stimmt die Belegart „{_kategorie_label(ki_kat)}“?",
+        ["ja", "nein"],
+        format_func={"ja": "Ja, stimmt", "nein": "Nein, es ist eine andere Belegart"}.get,
+        index=None if richtig is None else (0 if richtig else 1),
+        horizontal=True,
+        key=f"{key}_kat_ok",
+    )
+    if antwort == "ja":
+        return ki_kat
+    if antwort == "nein":
+        andere = [k for k in namen if k != ki_kat]
+        return st.selectbox("Richtige Belegart", andere, format_func=namen.get, key=f"{key}_kat_wahl",
+                            index=andere.index(korrekt) if korrekt in andere else None,
+                            placeholder="Bitte wählen …")
+    return None
+
+
 def zeige_feedback(erg):
     analyse = erg["analyse"]
     st.subheader("Feedback: Was hat die KI richtig erkannt?")
@@ -547,16 +573,8 @@ def zeige_feedback(erg):
         "Beträge wie 1.234,50 – Datum als TT.MM.JJJJ."
     )
 
-    kategorie_namen = kat_auswahl(KAT_STAND)  # auch Entwürfe: neu angelegte Kategorien sofort wählbar
-    kategorie_keys = list(kategorie_namen)
+    kat_korrekt = _belegart_frage(analyse.kategorie, f"fb_{erg['sha']}")
     with st.form(key=f"feedback_{erg['sha']}"):
-        kat_korrekt = st.selectbox(
-            "Richtige Kategorie",
-            options=kategorie_keys,
-            index=kategorie_keys.index(analyse.kategorie) if analyse.kategorie in kategorie_keys else 0,
-            format_func=kategorie_namen.get,
-        )
-
         korrekturen = _felder_eingabe(analyse, f"fb_{erg['sha']}")
 
         hinweise_ok = st.radio(
@@ -574,6 +592,9 @@ def zeige_feedback(erg):
         abgeschickt = st.form_submit_button("Feedback speichern", type="primary")
 
     if not abgeschickt:
+        return
+    if kat_korrekt is None:
+        st.error("Bitte oben beantworten, ob die Belegart stimmt (und ggf. die richtige wählen).")
         return
 
     felder, ungueltig = _felder_auswerten(analyse, korrekturen)
@@ -741,11 +762,17 @@ def _bewertete_belege_durchsehen(eintraege: list[dict]) -> None:
     st.subheader("Bewertete Belege durchsehen")
     fehlerfrei = [e for e in eintraege if _fehlerfrei(e)]
     korrigiert = [e for e in eintraege if not _fehlerfrei(e)]
+    mit_kommentar = [e for e in eintraege if (e.get("kommentar") or "").strip()]
     ansichten = {"alle": f"Alle ({len(eintraege)})", "fehlerfrei": f"Fehlerfrei ({len(fehlerfrei)})",
-                 "korrigiert": f"Mit Korrekturen ({len(korrigiert)})"}
+                 "korrigiert": f"Mit Korrekturen ({len(korrigiert)})",
+                 "kommentar": f"Mit Kommentar ({len(mit_kommentar)})"}
     ansicht = st.radio("Anzeigen", list(ansichten), format_func=ansichten.get, horizontal=True,
                        key="auswertung_ansicht", label_visibility="collapsed")
-    liste = {"alle": eintraege, "fehlerfrei": fehlerfrei, "korrigiert": korrigiert}[ansicht]
+    if ansicht == "kommentar":
+        st.caption("Belege mit Kommentar bitte ab und zu durchsehen: Steht im Kommentar ein Fehler, der in der "
+                   "Bewertung fehlt, über „Bewertung korrigieren“ nachtragen.")
+    liste = {"alle": eintraege, "fehlerfrei": fehlerfrei, "korrigiert": korrigiert,
+             "kommentar": mit_kommentar}[ansicht]
     liste = sorted(liste, key=lambda e: e.get("zeitpunkt") or "", reverse=True)  # neueste zuerst
     if not liste:
         st.info("In dieser Ansicht gibt es keine Belege.")
@@ -785,6 +812,61 @@ def _bewertete_belege_durchsehen(eintraege: list[dict]) -> None:
         st.caption("  \n".join(details))
         if e.get("kommentar"):
             st.info(f"**Kommentar:** {e['kommentar']}", icon=":material/comment:")
+        if e.get("korrektur_von"):
+            st.caption(f"Diese Bewertung ersetzt die vom {zeitpunkt_de(e['korrektur_von'])}.")
+        _bewertung_korrigieren(e)
+
+
+def _bewertung_korrigieren(e: dict) -> None:
+    """Neue Bewertung für denselben Beleg anlegen – die jüngste zählt, die alte bleibt als Verlauf erhalten."""
+    if not e.get("analyse"):
+        return
+    with st.expander("Bewertung korrigieren", icon=":material/edit:"):
+        st.caption("Falls die Bewertung nicht stimmt – z. B. steht im Kommentar ein Fehler, der oben als „ok“ "
+                   "gezählt ist. Gespeichert wird eine neue Bewertung; die bisherige bleibt im Verlauf erhalten.")
+        ki = BelegAnalyse.model_validate(e["analyse"])
+        key = f"nb_{e.get('datei_sha256')}_{e.get('zeitpunkt')}"
+        k = e["kategorie"]
+        ki_kat = k.get("modell") or ki.kategorie  # so wie damals gespeichert (auch inzwischen gelöschte Kategorien)
+        kat_korrekt = _belegart_frage(ki_kat, key, richtig=k["richtig"], korrekt=k["korrekt"])
+        felder_alt = e.get("felder") or {}
+        bisher = SimpleNamespace(**{  # Startwerte = bisher als richtig festgehaltene Werte
+            f: (felder_alt[f]["korrekt"] if f in felder_alt else getattr(ki, f)) for f, _l, _t in FEEDBACK_FELDER})
+        with st.form(key=f"{key}_form"):
+            korrekturen = _felder_eingabe(bisher, key)
+            begruendung = st.text_area("Was war an der Bewertung falsch? (Pflicht)",
+                                       placeholder="z. B. Zimmerbuchung – ist eine Übernachtung, keine Bewirtung")
+            abgeschickt = st.form_submit_button("Neue Bewertung speichern", type="primary")
+        if not abgeschickt:
+            return
+        if kat_korrekt is None:
+            st.error("Bitte beantworten, ob die Belegart stimmt (und ggf. die richtige wählen).")
+            return
+        if not begruendung.strip():
+            st.error("Bitte kurz begründen, was an der Bewertung falsch war.")
+            return
+        felder, ungueltig = _felder_auswerten(ki, korrekturen)  # verglichen wird immer mit der KI-Lesung
+        if ungueltig:
+            st.error("Bitte prüfe diese Eingaben, sie konnten nicht gelesen werden: " + ", ".join(ungueltig))
+            return
+        neu = {f: v for f, v in e.items() if f != "zeitpunkt"}
+        bearbeiter = aktueller_benutzer()
+        neu.update({
+            "kategorie": {"modell": ki_kat, "korrekt": kat_korrekt, "richtig": ki_kat == kat_korrekt},
+            "felder": felder,
+            "kommentar": begruendung.strip(),
+            "kommentar_vorher": e.get("kommentar"),
+            "korrektur_von": e.get("zeitpunkt"),
+            "bearbeiter": bearbeiter,
+            "benutzer_email": bearbeiter,
+        })
+        try:
+            feedback_speichern(neu)
+        except Exception as ex:
+            st.error(f"Speichern fehlgeschlagen – bitte erneut versuchen: {ex}")
+            return
+        st.toast("Neue Bewertung gespeichert.", icon=":material/check_circle:")
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -1451,7 +1533,24 @@ _TAB_FARBEN = [("#C25100", "#C25100"), ("#036BD3", "#036BD3"), ("#373A43", "#373
 _TAB = '.stTabs [role="tab"]'
 st.markdown(
     "<style>"
-    '[class*="st-key-belegbild_"] img {max-height: 560px; width: auto; max-width: 100%; object-fit: contain;}'
+    '[class*="st-key-belegbild_"] img {max-height: 560px; width: auto; max-width: 100%; object-fit: contain;'
+    ' display: block; margin: 0 auto;}'
+    '[class*="st-key-belegbild_"] {position: relative;}'
+    + ''.join(f'[class*="st-key-belegbild_"] {x}, ' for x in (
+        '[data-testid="stElementContainer"]', '[data-testid="stFullScreenFrame"]',
+        '[data-testid="stFullScreenFrame"] > div', '[data-testid="stImage"]'))
+    + '[class*="st-key-belegbild_"] [data-testid="stImageContainer"]'
+    ' {width: 100% !important; align-items: center; justify-content: center;}'
+    # Bild selbst ist klickbar: unsichtbarer Button liegt darüber; Hover-Vollbild-Symbol ausblenden
+    '[class*="st-key-bildklick_"] {position: absolute !important; inset: 0; z-index: 2; height: 100% !important;}'
+    '[class*="st-key-bildklick_"] > div, [class*="st-key-bildklick_"] .stButton {height: 100%; width: 100%;}'
+    '[class*="st-key-bildklick_"] button {width: 100% !important; height: 100%; opacity: 0; cursor: zoom-in;}'
+    '[class*="st-key-gross_"] button {width: auto !important; flex: 0 0 auto;}'
+    '[class*="st-key-belegbild_"] [data-testid="stElementToolbar"] {display: none;}'
+    # Button und Seitenangabe mittig unter dem Bild
+    '[class*="st-key-gross_"], [class*="st-key-gross_"] > div, [class*="st-key-gross_"] .stButton'
+    ' {display: flex; justify-content: center; width: 100%;}'
+    '[class*="st-key-belegspalte_"] [data-testid="stCaptionContainer"] {text-align: center;}'
     # Belegspalte (Nachfragen/Auswertung) genau so hoch wie die rechte Spalte: Inhalt absolut im Spaltenrahmen,
     # das Bild füllt den Platz zwischen Überschrift und Button. Nur nebeneinander (ab 640 px), sonst normal.
     "@media (min-width: 640px) {"
@@ -1461,7 +1560,7 @@ st.markdown(
     '[class*="st-key-belegspalte_"] [class*="st-key-belegbild_"],'
     ' [class*="st-key-belegspalte_"] [class*="st-key-belegbild_"] div {height: 100%; min-height: 0;}'
     '[class*="st-key-belegspalte_"] [class*="st-key-belegbild_"] img {height: 100%; max-height: none;'
-    ' width: 100%; object-fit: contain; object-position: left top;}'
+    ' width: 100%; object-fit: contain; object-position: center top;}'
     "}"
     '.stTabs [role="tablist"] {gap: .5rem; padding: .4rem; border-radius: .75rem; flex-wrap: wrap;'
     " background: rgba(128,128,128,.14);}"
