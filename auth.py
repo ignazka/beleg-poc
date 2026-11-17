@@ -32,6 +32,37 @@ def _erlaubte_emails() -> set[str]:
     return {e.strip().lower() for e in liste if e.strip()}
 
 
+# Abmelden unten links in der Seitenleiste, rot gefüllt.
+# Selektoren passend zu Streamlit 1.67: die Seitenleiste wird zur Spalte, der Button (per order ans Ende
+# sortiert) rutscht mit margin-top:auto nach unten – der „Ablage:“-Hinweis aus App.py bleibt darüber.
+_ABMELDEN_CSS = (
+    "<style>"
+    'section[data-testid="stSidebar"] [data-testid="stSidebarContent"]'
+    "{display:flex; flex-direction:column;}"
+    'section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"]'
+    "{display:flex; flex-direction:column; flex:1 1 auto; min-height:0; padding-bottom:1rem;}"
+    'section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div'
+    "{display:flex; flex-direction:column; flex:1 1 auto; min-height:0;}"
+    'section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] div:has(> .stVerticalBlock)'
+    "{display:flex; flex-direction:column; flex:1 1 auto; min-height:0;}"
+    'section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] .stVerticalBlock'
+    "{display:flex; flex-direction:column; flex:1 1 auto; min-height:0;}"
+    'section[data-testid="stSidebar"] .st-key-abmelden{order:9999; margin-top:auto;}'
+    # Weiß auf #C62828 = 5,6:1 (WCAG AA), Hover/Active dunkler
+    'section[data-testid="stSidebar"] .st-key-abmelden button'
+    "{width:100%; background:#C62828; border:1px solid #C62828; color:#fff;}"
+    'section[data-testid="stSidebar"] .st-key-abmelden button:hover'
+    "{background:#A11F1F; border-color:#A11F1F; color:#fff;}"
+    'section[data-testid="stSidebar"] .st-key-abmelden button:active,'
+    'section[data-testid="stSidebar"] .st-key-abmelden button:focus:not(:active)'
+    "{background:#8E1B1B; border-color:#8E1B1B; color:#fff;}"
+    'section[data-testid="stSidebar"] .st-key-abmelden button:focus-visible'
+    "{outline:3px solid #FF8A80; outline-offset:2px;}"
+    'section[data-testid="stSidebar"] .st-key-abmelden button p{color:#fff;}'
+    "</style>"
+)
+
+
 def login_erzwingen() -> None:
     """Stoppt das Skript, solange kein freigeschalteter Benutzer angemeldet ist."""
     if _login_deaktiviert():
@@ -61,7 +92,8 @@ def login_erzwingen() -> None:
     with st.sidebar:
         st.markdown(benutzer_karte(st.user.get("name") or email, email, st.user.get("picture")),
                     unsafe_allow_html=True)
-        st.button("Abmelden", on_click=st.logout)
+        st.markdown(_ABMELDEN_CSS, unsafe_allow_html=True)
+        st.button("Abmelden", key="abmelden", on_click=st.logout)
 
 
 def _initialen(name: str) -> str:
