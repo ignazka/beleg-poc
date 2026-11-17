@@ -76,8 +76,19 @@ def aktiv(stand: dict[str, dict]) -> dict[str, dict]:
 
 
 def labels(stand: dict[str, dict]) -> dict[str, str]:
-    """{schluessel: Name} der aktiven Kategorien – für Validierung und Anzeige."""
+    """{schluessel: Name} der aktiven Kategorien – für die Validierung der KI-Antworten."""
     return {k: v["name"] for k, v in aktiv(stand).items()}
+
+
+def auswahl(stand: dict[str, dict]) -> dict[str, str]:
+    """{schluessel: Anzeigename} für Auswahllisten von Menschen – inklusive Entwürfe.
+
+    Anders als labels() (nur aktive Kategorien, damit die KI keine Entwürfe ausgibt) dürfen Menschen
+    eine gerade angelegte Kategorie auch schon als Entwurf auswählen. Entwürfe werden gekennzeichnet,
+    gelöschte Kategorien erscheinen nicht.
+    """
+    return {k: v["name"] + ("" if v.get("status") == "aktiv" else " (Entwurf)")
+            for k, v in sichtbar(stand).items()}
 
 
 def _als_text(wert) -> str:

@@ -211,7 +211,7 @@ assert ohne_tg.brutto == 70.00 and ohne_tg.korrekturen == [] and pruefen(ohne_tg
 
 # Kategorien aus der App: Versionen, Löschen, Prompt, Validierung
 from beleg_schema import KATEGORIEN, kategorien_registrieren  # noqa: E402
-from kategorien import aktiv, aktueller_stand, labels, prompt_abschnitt, schluessel_aus_name, wissens_hash  # noqa: E402
+from kategorien import aktiv, aktueller_stand, auswahl, labels, prompt_abschnitt, schluessel_aus_name, wissens_hash  # noqa: E402
 from prompts import system_prompt  # noqa: E402
 
 assert schluessel_aus_name("Reisekosten Bahn & Flug") == "reisekosten_bahn_flug"
@@ -238,6 +238,21 @@ assert "parken" not in KATEGORIEN and BelegAnalyse.model_validate({"kategorie": 
 assert '"parken"' in system_prompt(prompt_abschnitt(stand))
 assert any("Pflichtangaben laut Kategorie" in g for g in nachfragen_gruende(
     aral.model_copy(update={"fehlende_pflichtangaben": ["Mitarbeitername"]}), []))
+# Auswahllisten für Menschen: Entwürfe sind wählbar (gekennzeichnet), gelöschte nicht
+entwurf_stand = aktueller_stand([
+    {"schluessel": "reisekosten", "name": "Reisekosten - Mitarbeiter", "status": "entwurf", "version": 1,
+     "zeitpunkt": "2026-11-17T13:00:00"},
+    {"schluessel": "parken", "name": "Parkbeleg", "status": "geloescht", "version": 3,
+     "zeitpunkt": "2026-11-17T13:30:00"},
+])
+menschliche_auswahl = auswahl(entwurf_stand)
+assert menschliche_auswahl["reisekosten"] == "Reisekosten - Mitarbeiter (Entwurf)"
+assert menschliche_auswahl["tankbeleg"] == "Tankbeleg (Kraftstoff)"
+assert "parken" not in menschliche_auswahl  # gelöscht -> nicht wählbar
+assert "reisekosten" not in labels(entwurf_stand)  # Entwürfe bleiben aus dem Prompt
+kategorien_registrieren(labels(entwurf_stand))
+assert "reisekosten" not in KATEGORIEN  # ... und damit auch aus der KI-Validierung
+
 
 # Testlauf: Erwartung und Zusammenfassung
 from testlauf import Ergebnis, erwartete_kategorien, zusammenfassung  # noqa: E402

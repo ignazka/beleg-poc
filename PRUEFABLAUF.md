@@ -190,7 +190,9 @@ Datei: `App.py` (`zeige_nachfragen`, `_nachfrage_bearbeiten`), Ablage `storage.p
 1. Liste filtern: **Offen**, **Zurückgestellt**, **Erledigt** oder **Alle**. Die neuesten stehen oben.
 2. Nachfrage auswählen. Links steht das Original (alle Seiten), rechts die Gründe und die von der KI
    gelesenen Werte als Formular.
-3. Werte mit dem Beleg vergleichen und nur Falsches korrigieren.
+3. Werte mit dem Beleg vergleichen und nur Falsches korrigieren. Die **Belegart** wählt man aus der Liste der
+   Standard- und selbst angelegten Kategorien; noch nicht aktivierte Kategorien stehen als „(Entwurf)“ dabei,
+   gelöschte nicht. (Entwürfe fließen weiterhin nicht in den KI-Prompt ein, siehe Abschnitt 9.)
 4. Entscheiden:
    - **Freigeben**: Die (korrigierten) Daten gelten, der Beleg kann weiter.
    - **Zurückstellen**: Rückfrage bei Mitarbeiter:in nötig, z. B. weil die Rechnung fehlt. Begründung ist Pflicht.
@@ -216,7 +218,9 @@ Dateien: `kategorien.py`, `prompts.py` (`system_prompt`, `prompt_version`), `App
   anderen Kategorie überschneidet, stellt er als **Rückfrage an die Buchhaltung**, statt zu raten. Sein
   Ergebnis ist nur ein Vorschlag. Erst „Speichern“ übernimmt ihn.
 - **Status**: „Entwurf“ wird gespeichert, aber noch nicht verwendet. „Aktiv“ fließt ab sofort in jede
-  Analyse ein.
+  Analyse ein. Entwürfe erscheinen in den Auswahllisten der Nachfragen und des Feedbacks als „(Entwurf)“,
+  damit eine neu angelegte Kategorie sofort auswählbar ist – der KI-Prompt und die Prüfung ihrer Antworten
+  nutzen aber nur aktive Kategorien.
 - **Jede Änderung ist eine neue Version** (`kategorien/`) mit Person und Zeitpunkt. Löschen ist ebenfalls
   nur eine neue Version mit Status „gelöscht“, der Verlauf bleibt erhalten.
 - **Lesbare Kopie im Drive**: Pro Kategorie ein Google-Doc „Kategorie-Beschreibung (aus der App)“ in

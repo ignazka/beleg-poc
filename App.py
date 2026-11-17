@@ -22,6 +22,7 @@ from marke import APP_NAME, kopfzeile
 from kategorien import ASSISTENT_PROMPT, aktueller_stand, assistent_nachricht, labels, prompt_abschnitt, wissens_hash
 from kategorien import aktiv as kat_aktiv
 from kategorien import als_dokument as kat_dokument
+from kategorien import auswahl as kat_auswahl
 from kategorien import schluessel_aus_name as kat_schluessel
 from kategorien import sichtbar as kat_sichtbar
 from prompts import prompt_version, system_prompt
@@ -88,7 +89,8 @@ PROMPT_VERSION = prompt_version(wissens_hash(KAT_STAND))
 
 
 def _kategorie_label(key):
-    return KATEGORIEN.get(key, key)
+    """Anzeigename einer Belegart – auch für Entwürfe und inzwischen gelöschte Kategorien."""
+    return (KAT_STAND.get(key) or {}).get("name") or KATEGORIEN.get(key, key)
 
 
 # ---------------------------------------------------------------------------
@@ -519,13 +521,14 @@ def zeige_feedback(erg):
         "Beträge wie 1.234,50 – Datum als TT.MM.JJJJ."
     )
 
-    kategorie_keys = list(KATEGORIEN.keys())
+    kategorie_namen = kat_auswahl(KAT_STAND)  # auch Entwürfe: neu angelegte Kategorien sofort wählbar
+    kategorie_keys = list(kategorie_namen)
     with st.form(key=f"feedback_{erg['sha']}"):
         kat_korrekt = st.selectbox(
             "Richtige Kategorie",
             options=kategorie_keys,
-            index=kategorie_keys.index(analyse.kategorie),
-            format_func=_kategorie_label,
+            index=kategorie_keys.index(analyse.kategorie) if analyse.kategorie in kategorie_keys else 0,
+            format_func=kategorie_namen.get,
         )
 
         korrekturen = _felder_eingabe(analyse, f"fb_{erg['sha']}")
@@ -826,13 +829,14 @@ def _nachfrage_bearbeiten(n: dict, letzte: dict | None):
         if analyse.korrekturen:
             st.info("**Vom Code umgedeutet**\n\n" + "\n".join(f"- {k}" for k in analyse.korrekturen),
                     icon=":material/calculate:")
-        kategorie_keys = list(KATEGORIEN.keys())
+        kategorie_namen = kat_auswahl(KAT_STAND)  # auch Entwürfe: neu angelegte Kategorien sofort wählbar
+        kategorie_keys = list(kategorie_namen)
         with st.form(key=f"nachfrage_form_{sha}"):
             kat = st.selectbox(
                 "Belegart",
                 kategorie_keys,
                 index=kategorie_keys.index(analyse.kategorie) if analyse.kategorie in kategorie_keys else 0,
-                format_func=_kategorie_label,
+                format_func=kategorie_namen.get,
             )
             korrekturen = _felder_eingabe(analyse, f"nf_{sha}")
             entscheidung = st.radio(
