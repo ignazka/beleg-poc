@@ -367,11 +367,13 @@ def _beleg_vorschau(bilder: list[bytes], titel: str, key: str) -> None:
         return
     n = len(bilder)
     with st.container(key=f"belegbild_{key}"):
-        spalten = st.columns(min(n, _VORSCHAU_SEITEN)) if n > 1 else [st.container()]
-        for i, (spalte, bild) in enumerate(zip(spalten, bilder), start=1):
-            spalte.image(bild, caption=f"Seite {i} von {n}" if n > 1 else None)
+        spalten = st.columns(min(n, _VORSCHAU_SEITEN)) if n > 1 else [st]
+        for spalte, bild in zip(spalten, bilder):
+            spalte.image(bild)
     if n > _VORSCHAU_SEITEN:
-        st.caption(f"+ {n - _VORSCHAU_SEITEN} weitere Seite(n) in der großen Ansicht")
+        st.caption(f"{n} Seiten – {n - _VORSCHAU_SEITEN} weitere in der großen Ansicht")
+    elif n > 1:
+        st.caption(f"{n} Seiten")
     if st.button("Größer ansehen", icon=":material/zoom_in:", key=f"gross_{key}"):
         _beleg_gross(bilder, titel)
 
@@ -757,7 +759,7 @@ def _bewertete_belege_durchsehen(eintraege: list[dict]) -> None:
     e = st.selectbox(f"Beleg auswählen ({len(liste)})", liste, format_func=beschriftung, key="auswertung_beleg")
 
     col_bild, col_daten = st.columns([2, 3], gap="large")
-    with col_bild:
+    with col_bild, st.container(key="belegspalte_auswertung"):  # so hoch wie die rechte Spalte (CSS)
         st.markdown("**Beleg**")
         _belegbilder(e, "auswertung")
 
@@ -934,7 +936,7 @@ def _nachfrage_bearbeiten(n: dict, letzte: dict | None):
     )
 
     col_bild, col_form = st.columns([2, 3], gap="large")
-    with col_bild:
+    with col_bild, st.container(key="belegspalte_nachfrage"):  # so hoch wie die rechte Spalte (CSS)
         st.subheader("Beleg")
         _belegbilder(n, "nachfrage")
 
@@ -1450,6 +1452,17 @@ _TAB = '.stTabs [role="tab"]'
 st.markdown(
     "<style>"
     '[class*="st-key-belegbild_"] img {max-height: 560px; width: auto; max-width: 100%; object-fit: contain;}'
+    # Belegspalte (Nachfragen/Auswertung) genau so hoch wie die rechte Spalte: Inhalt absolut im Spaltenrahmen,
+    # das Bild füllt den Platz zwischen Überschrift und Button. Nur nebeneinander (ab 640 px), sonst normal.
+    "@media (min-width: 640px) {"
+    '[data-testid="stColumn"]:has([class*="st-key-belegspalte_"]) {position: relative; min-height: 360px;}'
+    '[class*="st-key-belegspalte_"] {position: absolute; inset: 0; flex-wrap: nowrap;}'
+    '[class*="st-key-belegspalte_"] > :has([class*="st-key-belegbild_"]) {flex: 1 1 0; min-height: 0;}'
+    '[class*="st-key-belegspalte_"] [class*="st-key-belegbild_"],'
+    ' [class*="st-key-belegspalte_"] [class*="st-key-belegbild_"] div {height: 100%; min-height: 0;}'
+    '[class*="st-key-belegspalte_"] [class*="st-key-belegbild_"] img {height: 100%; max-height: none;'
+    ' width: 100%; object-fit: contain; object-position: left top;}'
+    "}"
     '.stTabs [role="tablist"] {gap: .5rem; padding: .4rem; border-radius: .75rem; flex-wrap: wrap;'
     " background: rgba(128,128,128,.14);}"
     '.stTabs [role="tablist"]::after {display: none;}'  # graue Grundlinie ausblenden
