@@ -18,8 +18,12 @@ Kurzfassung:
 
 Datei: `extraction.py` (`dateien_zu_bildern`)
 
-- Erlaubt: JPG, PNG, PDF. **Mehrere Dateien werden als ein Beleg gelesen**, z. B. Rechnung + EC-Beleg
-  oder mehrere Fotos einer langen Rechnung.
+- Erlaubt: JPG, PNG, PDF. Bei mehreren Dateien fragt die App, wie sie gelesen werden sollen:
+  - **Stapel** (Standard): Jede Datei ist ein eigener Beleg. Bis zu 30 Belege, 3 gleichzeitig, jeder mit
+    dem vollen Ablauf. Ergebnis: Übersicht (stimmig / Nachfrage / Fehler, farbig), CSV-Download,
+    jeder Beleg im Detail ansehbar und bewertbar. Unklare Belege landen automatisch unter „Nachfragen“.
+  - **Ein Beleg**: Alle Dateien gehören zusammen, z. B. Rechnung + EC-Beleg oder mehrere Fotos einer
+    langen Rechnung.
 - PDFs werden **vollständig** gelesen, bis 20 Seiten insgesamt. Mehr Seiten → Nachfrage.
 - Fotos werden automatisch gedreht (Handy-Ausrichtung) und auf höchstens 2000 Pixel verkleinert
   (ab 6 Seiten 1600 Pixel). PDF-Seiten werden mit 150 dpi in Bilder umgewandelt.
@@ -206,11 +210,11 @@ Auswertung, ob eine geänderte Beschreibung die Trefferquote verbessert oder ver
 Nachtrainieren des Modells lohnt sich erst mit einigen hundert geprüften Belegen. Diese sammeln
 Feedback und Freigaben gerade.
 
-### Testlauf vor dem Aktivieren
+### Probelauf vor dem Speichern („Hilft meine Änderung?“)
 
 Datei: `testlauf.py`, `App.py` (`_zeige_testlauf`)
 
-Im Tab „Kategorien“ gibt es pro Kategorie einen **Testlauf mit Beispielbelegen**. Die Beispielbelege
+Im Tab „Kategorien“ öffnet der Button **„Testen“** (unter dem Formular einer Kategorie) ein Fenster mit dem **Probelauf mit Beispielbelegen**. Kategorien wählt man per Klick auf ihre Zeile in der Tabelle; die letzte Zeile „+ Neue Kategorie anlegen“ legt eine neue an. Die Beispielbelege
 liegen im passenden Ordner unter `Anlage KI Assistent/` (z. B. „Bewirtungsbeleg Deutschland“). Neue
 Beispiele lassen sich direkt in der App hochladen.
 
@@ -219,8 +223,11 @@ Jeder Beispielbeleg wird zweimal komplett analysiert (doppelt lesen, Prüfungen,
 - **vorher**: mit dem gespeicherten Kategorie-Wissen
 - **nachher**: mit dem Stand im Formular, auch wenn er noch nicht gespeichert ist
 
-Ergebnis pro Variante: Wie viele Belege wurden als diese Kategorie erkannt? (Bewirtungs-Unterarten
-zählen gegenseitig.) Wie viele müssten zur Nachfrage? Dazu eine Tabelle pro Beleg mit „geändert“-Markierung.
+Ergebnis pro Variante („Bisherige Beschreibung“ / „Neue Beschreibung“): Wie viele Belege wurden als diese
+Kategorie erkannt? (Bewirtungs-Unterarten zählen gegenseitig.) Wie viele müssten nachgefragt werden? Dazu
+ein **Fazit in einem Satz** („Die Änderung hilft“ / „Eher nicht speichern“ / „Kein Unterschied“; richtig
+erkennen zählt mehr als wenige Rückfragen) und eine Tabelle pro Beleg: grün = sicher, rot = Nachfrage,
+grau = Datei nicht lesbar.
 Gespeichert wird beim Testlauf **nichts**. Höchstens 15 Belege pro Lauf, 4 parallel.
 
 ## 10. Feedback und Messung

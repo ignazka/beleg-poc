@@ -1,11 +1,14 @@
-# Oberfläche: dunkles Design als Standard. Hell lässt sich weiterhin im Menü (⋮ → Settings) wählen.
-# Farben mit ausreichendem Kontrast (WCAG AA): Text auf Hintergrund > 12:1, weiße Schrift auf Akzent > 4,5:1.
+# Oberfläche im RE-ALIS-Design (Farben von re-alis.com), helles Design.
+# Schrift: Source Sans 3 – wie auf der Firmenseite und zugleich Streamlits Standardschrift.
+# Primärfarbe: Marken-Orange (#FF6A00) leicht abgedunkelt, damit weiße Schrift auf Buttons
+# lesbar bleibt (4,7:1, WCAG AA). Text auf Hintergrund > 16:1.
 [theme]
-base = "dark"
-primaryColor = "#2F6FDB"
-backgroundColor = "#0F141C"
-secondaryBackgroundColor = "#1A2230"
-textColor = "#E6EAF0"
+base = "light"
+primaryColor = "#C25100"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#EEF2F6"
+textColor = "#14151A"
+font = "sans-serif"
 
 [client]
 toolbarMode = "viewer"

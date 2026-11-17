@@ -38,6 +38,7 @@ python test_logik.py   # Tests ohne API-Aufruf
 | `auth.py` | Google-Login über `st.login`, nur E-Mails aus `[zugang].erlaubte_emails`. Fail closed: ohne `[auth]` oder mit leerer Liste ist die App gesperrt |
 | `storage.py` | Ein gemeinsamer Ordner für alle Benutzer. Mit `[google_drive]`: Drive-Ordner `belege/` + `feedback/` (eine JSON-Datei pro Bewertung). Dazu `nachfragen/`, `entscheidungen/`, `kategorien/` (alles nur anhängen) und lesbare Kategorie-Docs in `Anlage KI Assistent/<Kategorie>/`. Sonst lokal `data/` (bzw. `BELEG_DATENORDNER`): `feedback.jsonl`, `nachfragen.jsonl`, `belege/`, Rechte 0700/0600 |
 | `drive_token_holen.py` | Einmalig lokal: Refresh-Token für den Drive-Zugriff erzeugen und Ordnerzugriff prüfen |
+| `assets/` | RE-ALIS-Logo und -Symbol (SVG, von re-alis.com, Farben direkt eingetragen). Design in `.streamlit/config.toml`: helles Theme, Marken-Orange (abgedunkelt auf `#C25100` für lesbare Buttons), Source Sans 3 |
 | `test_logik.py` | Assert-Tests für Parsing, Vergleich, JSON-Extraktion, Pydantic, Ableitungen und Prüfungen (inkl. echter Fälle Domhof/Aral) |
 
 **Ablauf:** Upload → `datei_zu_bildern` → `analysieren` (OpenRouter, Modell liest nur ab) → `BelegAnalyse`

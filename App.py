@@ -1,6 +1,10 @@
 """Beleg-Klassifizierung PoC – Upload, Analyse, Feedback."""
 
+import csv
+import io
 import time
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import streamlit as st
 
@@ -42,7 +46,12 @@ from storage import (
     schon_bewertet,
 )
 
-st.set_page_config(page_title="Beleg-Klassifizierung PoC", layout="wide")
+_ASSETS = Path(__file__).parent / "assets"
+if not _ASSETS.exists():  # z. B. wenn App.py aus einem anderen Ordner ausgeführt wird
+    _ASSETS = Path.cwd() / "assets"
+st.set_page_config(page_title="Beleg-Klassifizierung – RE-ALIS", page_icon=str(_ASSETS / "realis-symbol.svg"),
+                   layout="wide")
+st.logo(str(_ASSETS / "realis-logo.svg"), icon_image=str(_ASSETS / "realis-symbol.svg"), size="large")
 
 if ist_datenschutzseite():  # öffentlich, ohne Login (von Google für den OAuth-Produktionsmodus verlangt)
     zeige_datenschutz()
@@ -91,38 +100,26 @@ def _belege_speichern(dateien) -> list[str]:
     return [beleg_speichern(b, name, datei_hash(b)) for name, b, _ in dateien]
 
 
-def analyse_starten(uploads):
-    dateien = _dateien(uploads)
+class DateiFehler(Exception):
+    """Datei nicht lesbar (defektes PDF, unbekanntes Bildformat)."""
+
+
+def _beleg_verarbeiten(dateien, status=None) -> dict:
+    """Ein Beleg (eine oder mehrere Dateien) -> Ergebnis-Dict. Ohne Streamlit-Aufrufe, läuft auch parallel.
+    Wirft DateiFehler bzw. AnalyseFehler/Exception bei Modellproblemen. Legt KEINE Nachfrage ab."""
     sha = beleg_hash(dateien)
     dateiname = ", ".join(name for name, _, _ in dateien)
     try:
         bilder, seiten_gesamt, seiten_gelesen = dateien_zu_bildern(dateien)
-    except Exception as e:  # defektes PDF / Bildformat
-        st.session_state["fehler"] = (f"Datei konnte nicht gelesen werden: {e}", None)
-        return
+    except Exception as e:
+        raise DateiFehler("Datei konnte nicht geöffnet werden – beschädigt oder kein gültiges PDF/Bild.") from e
 
     t0 = time.time()
-    with st.status("Analysiere Beleg …", expanded=False) as fortschritt:
-        try:
-            lese = beleg_lesen(bilder, dateien, status=lambda text: fortschritt.update(label=text),
-                               system=SYSTEM_PROMPT_AKTUELL)
-        except AnalyseFehler as e:
-            st.session_state["fehler"] = (str(e), e.raw)
-            fortschritt.update(label="Analyse fehlgeschlagen", state="error")
-            return
-        except Exception as e:
-            st.session_state["fehler"] = (f"Fehler beim Modell-Aufruf: {e}", None)
-            fortschritt.update(label="Analyse fehlgeschlagen", state="error")
-            return
-        fortschritt.update(label="Analyse fertig", state="complete")
-
-    dauer_s = round(time.time() - t0, 1)
+    lese = beleg_lesen(bilder, dateien, status=status, system=SYSTEM_PROMPT_AKTUELL)
     gruende = list(lese.gruende)
     if seiten_gelesen < seiten_gesamt:
         gruende.append(f"Nur {seiten_gelesen} von {seiten_gesamt} Seiten gelesen (Obergrenze {MAX_SEITEN}).")
-
-    st.session_state.pop("fehler", None)
-    st.session_state["ergebnis"] = {
+    return {
         "sha": sha,
         "dateiname": dateiname,
         "dateien": dateien,
@@ -139,13 +136,108 @@ def analyse_starten(uploads):
         "nachfrage_gruende": gruende,
         "raw": lese.raw,
         "usage": lese.usage,
-        "dauer_s": dauer_s,
+        "dauer_s": round(time.time() - t0, 1),
         "prompt_version": PROMPT_VERSION,
     }
-    st.session_state["ergebnis"]["nachfrage_status"] = (
-        _nachfrage_ablegen(st.session_state["ergebnis"]) if gruende else None
+
+
+def analyse_starten(uploads):
+    """Alle hochgeladenen Dateien als EINEN Beleg analysieren."""
+    with st.status("Analysiere Beleg …", expanded=False) as fortschritt:
+        try:
+            erg = _beleg_verarbeiten(_dateien(uploads), status=lambda text: fortschritt.update(label=text))
+        except DateiFehler as e:
+            st.session_state["fehler"] = (str(e), None)
+        except AnalyseFehler as e:
+            st.session_state["fehler"] = (str(e), e.raw)
+        except Exception as e:
+            st.session_state["fehler"] = (f"Fehler beim Modell-Aufruf: {e}", None)
+        else:
+            fortschritt.update(label="Analyse fertig", state="complete")
+            st.session_state.pop("fehler", None)
+            erg["nachfrage_status"] = _nachfrage_ablegen(erg) if erg["nachfrage_gruende"] else None
+            st.session_state["ergebnis"] = erg
+            return
+        fortschritt.update(label="Analyse fehlgeschlagen", state="error")
+
+
+MAX_STAPEL = 30
+STAPEL_PARALLEL = 3
+
+
+def stapel_starten(uploads):
+    """Jede Datei als EIGENEN Beleg analysieren, mehrere gleichzeitig."""
+    belege = [[d] for d in _dateien(uploads)[:MAX_STAPEL]]
+    ergebnisse: list[dict] = [None] * len(belege)
+    balken = st.progress(0.0, text=f"Analysiere {len(belege)} Belege …")
+    with ThreadPoolExecutor(max_workers=STAPEL_PARALLEL) as pool:
+        futures = {pool.submit(_beleg_verarbeiten, b): i for i, b in enumerate(belege)}
+        for fertig, f in enumerate(as_completed(futures), start=1):
+            i = futures[f]
+            try:
+                ergebnisse[i] = f.result()
+            except Exception as e:
+                ergebnisse[i] = {"sha": beleg_hash(belege[i]), "dateiname": belege[i][0][0], "fehler": str(e)}
+            balken.progress(fertig / len(belege), text=f"{fertig} von {len(belege)} Belegen fertig")
+    # Ablage im Hauptthread (Drive-Zugriffe), nicht in den Arbeits-Threads
+    for erg in ergebnisse:
+        if "fehler" not in erg:
+            erg["nachfrage_status"] = _nachfrage_ablegen(erg) if erg["nachfrage_gruende"] else None
+    balken.empty()
+    st.session_state["stapel"] = ergebnisse
+
+
+def _status_text(erg: dict) -> str:
+    if "fehler" in erg:
+        return "Fehler"
+    return "Nachfrage" if erg["nachfrage_gruende"] else "stimmig"
+
+
+def zeige_stapel(ergebnisse: list[dict]):
+    n = len(ergebnisse)
+    stimmig = sum(1 for e in ergebnisse if _status_text(e) == "stimmig")
+    nachfrage = sum(1 for e in ergebnisse if _status_text(e) == "Nachfrage")
+    fehler = n - stimmig - nachfrage
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Belege", n)
+    m2.metric("Stimmig", stimmig)
+    m3.metric("Zur Nachfrage", nachfrage)
+    m4.metric("Fehler", fehler)
+    if nachfrage:
+        st.info(f"{nachfrage} Beleg(e) liegen jetzt im Tab „Nachfragen“ zur Prüfung.", icon=":material/help:")
+
+    zeilen = []
+    for e in ergebnisse:
+        a = e.get("analyse")
+        zeilen.append({
+            "Datei": e["dateiname"],
+            "Status": _status_text(e),
+            "Belegart": _kategorie_label(a.kategorie) if a else "–",
+            "Aussteller": (a.restaurant_name or "–") if a else "–",
+            "Datum": anzeige(a.datum) or "–" if a else "–",
+            "Gesamtbetrag": _wert(a.brutto) if a else "–",
+            "Grund": " | ".join(e.get("nachfrage_gruende") or []) or e.get("fehler") or "",
+        })
+    _farbtabelle(zeilen, ["Status"], ganze_zeile=True)
+
+    puffer = io.StringIO()
+    schreiber = csv.DictWriter(puffer, fieldnames=list(zeilen[0]), delimiter=";")
+    schreiber.writeheader()
+    schreiber.writerows(zeilen)
+    st.download_button("Tabelle als CSV herunterladen", puffer.getvalue().encode("utf-8-sig"),
+                       file_name="beleg-stapel.csv", mime="text/csv", icon=":material/download:")
+
+    analysierbar = [e for e in ergebnisse if "fehler" not in e]
+    if not analysierbar:
+        return
+    st.divider()
+    gewaehlt = st.selectbox(
+        "Beleg im Detail ansehen und bewerten",
+        analysierbar,
+        format_func=lambda e: f"{e['dateiname']} – {_status_text(e)}",
+        key="stapel_detail",
     )
-    st.session_state["gespeichert"] = False
+    zeige_ergebnis(gewaehlt)
 
 
 def _lesungen_protokoll(erg) -> list[dict]:
@@ -189,6 +281,44 @@ def _wert(v) -> str:
     if isinstance(v, list):  # Steuersätze
         return ", ".join(f"{anzeige([s])} %" for s in v) or "–"
     return anzeige(v) or "–"
+
+
+# Status-Farben (Hintergrund, Schrift) für helles Design – Kontrast > 8:1.
+# Der Status steht immer zusätzlich als Wort in der Zelle (nicht nur Farbe).
+_STATUS_FARBE = {
+    "ok": ("#DCFCE7", "#14532D"),
+    "nachfrage": ("#FEE2E2", "#7F1D1D"),
+    "fehler": ("#E5E7EB", "#1F2937"),
+}
+
+
+def _status_von(text) -> str | None:
+    t = str(text).casefold()
+    if "fehler" in t:
+        return "fehler"
+    if "nachfrage" in t:
+        return "nachfrage"
+    if t.endswith("ok") or "stimmig" in t:
+        return "ok"
+    return None
+
+
+def _farbtabelle(zeilen: list[dict], status_spalten: list[str], ganze_zeile: bool = False) -> None:
+    """Tabelle mit grün (ok) / rot (Nachfrage) / grau (Fehler) hinterlegten Zellen bzw. Zeilen."""
+    import pandas as pd
+
+    def css(status):
+        if not status:
+            return ""
+        hg, schrift = _STATUS_FARBE[status]
+        return f"background-color: {hg}; color: {schrift}"
+
+    df = pd.DataFrame(zeilen)
+    if ganze_zeile:
+        stil = df.style.apply(lambda zeile: [css(_status_von(zeile[status_spalten[0]]))] * len(zeile), axis=1)
+    else:
+        stil = df.style.map(lambda wert: css(_status_von(wert)), subset=status_spalten)
+    st.table(stil.hide(axis="index"))
 
 
 def _tabelle(zeilen: list[dict]) -> None:
@@ -327,7 +457,7 @@ def zeige_feedback(erg):
     st.subheader("Feedback: Was hat die KI richtig erkannt?")
     st.caption("Hilft uns zu messen, wie gut die Erkennung ist. Bitte nur falsche Werte korrigieren.")
 
-    if st.session_state.get("gespeichert"):
+    if erg["sha"] in st.session_state.get("gespeichert_shas", set()):
         st.success("Feedback gespeichert – danke! Du kannst den nächsten Beleg hochladen.")
         return
     try:
@@ -382,7 +512,7 @@ def zeige_feedback(erg):
     except Exception as e:  # z. B. Drive nicht erreichbar, Ordner nicht beschreibbar
         st.error(f"Speichern fehlgeschlagen – bitte erneut versuchen: {e}")
         return
-    st.session_state["gespeichert"] = True
+    st.session_state.setdefault("gespeichert_shas", set()).add(erg["sha"])
     st.rerun()
 
 
@@ -749,53 +879,57 @@ def zeige_kategorien():
     if meldung:
         st.success(meldung, icon=":material/check_circle:")
     darf = darf_kategorien_bearbeiten()
-    st.caption(
-        "Aktive Kategorien und ihre Beschreibungen fließen bei jeder Analyse in die Anweisungen an die KI ein. "
-        f"Aktuelle Prompt-Version: `{PROMPT_VERSION}` – sie ändert sich mit jeder Änderung hier, damit die "
-        "Auswertung vorher/nachher vergleichen kann."
+    ss = st.session_state
+    st.subheader(
+        "Kategorien",
+        help="Aktive Kategorien und ihre Beschreibungen fließen bei jeder Analyse in die Anweisungen an die KI "
+             f"ein. Jede Änderung hier ändert die Prompt-Version (aktuell `{PROMPT_VERSION}`), damit die "
+             "Auswertung vorher und nachher vergleichen kann.\n\nKlicke auf eine Zeile, um eine Kategorie "
+             "anzusehen oder zu bearbeiten.",
     )
     if not darf:
-        st.info("Du kannst die Kategorien ansehen. Bearbeiten dürfen nur freigeschaltete Personen.",
-                icon=":material/lock:")
+        st.caption(":material/lock: Nur ansehen – bearbeiten dürfen freigeschaltete Personen.")
 
     sichtbare = kat_sichtbar(KAT_STAND)
-    _tabelle([{
+    schluessel = list(sichtbare) + ([_NEU] if darf else [])
+    zeilen = [{
         "Kategorie": k["name"],
         "Status": "Aktiv" if k.get("status") == "aktiv" else "Entwurf",
         "Art": "Standard" if k.get("standard") else "eigene",
         "Version": k.get("version", 0),
         "Zuletzt geändert": f"{zeitpunkt_de(k.get('zeitpunkt'))} {k.get('bearbeiter') or ''}".strip() or "–",
-    } for k in sichtbare.values()])
+    } for k in sichtbare.values()]
+    if darf:
+        zeilen.append({"Kategorie": "+ Neue Kategorie anlegen", "Status": "", "Art": "", "Version": None,
+                       "Zuletzt geändert": ""})
 
-    ss = st.session_state
-    optionen = list(sichtbare)
-    if "kategorie_wahl_naechste" in ss:  # nach dem Speichern/Löschen: passende Kategorie auswählen
-        naechste = ss.pop("kategorie_wahl_naechste")
-        if naechste:
-            ss["kategorie_wahl"] = naechste
-    if ss.get("kategorie_wahl") not in optionen:
-        ss.pop("kategorie_wahl", None)
-
-    spalte_liste, spalte_neu = st.columns([3, 1], vertical_alignment="bottom")
-    auswahl = spalte_liste.selectbox(
-        "Kategorie ansehen oder bearbeiten",
-        optionen,
-        format_func=lambda key: sichtbare[key]["name"],
-        key="kategorie_wahl",
-        on_change=lambda: ss.pop("kategorie_neu_modus", None),  # Auswahl beendet "neu anlegen"
+    # Klickbare Tabelle. Die gewählte Kategorie merken wir uns selbst ("kategorie_aktiv"), damit sie nach dem
+    # Speichern erhalten bleibt; der Tabellen-Schlüssel wechselt dann, damit keine alte Markierung stört.
+    ereignis = st.dataframe(
+        zeilen,
+        hide_index=True,
+        width="stretch",
+        on_select="rerun",
+        selection_mode="single-row",
+        key=f"kategorie_tabelle_{ss.setdefault('kategorie_tabelle_gen', 0)}",
+        column_config={"Version": st.column_config.NumberColumn(format="%d")},
     )
-    if darf and spalte_neu.button("Neue Kategorie", icon=":material/add:", type="primary", width="stretch"):
-        ss["kategorie_neu_modus"] = True
-    wahl = _NEU if darf and ss.get("kategorie_neu_modus") else auswahl
-    if wahl == _NEU and st.button("Abbrechen", icon=":material/close:"):
-        ss.pop("kategorie_neu_modus", None)
-        st.rerun()
+    zeile = ereignis.selection.rows[0] if ereignis.selection.rows else None
+    angeklickt = schluessel[zeile] if zeile is not None and zeile < len(schluessel) else None
+    if angeklickt != ss.get("kategorie_tabelle_letzte"):
+        ss["kategorie_tabelle_letzte"] = angeklickt
+        ss["kategorie_aktiv"] = angeklickt
+    wahl = ss.get("kategorie_aktiv")
+    if wahl not in schluessel:
+        st.caption("Klicke auf eine Kategorie in der Tabelle, um sie anzusehen oder zu bearbeiten.")
+        return
     k = {} if wahl == _NEU else sichtbare[wahl]
     standard = bool(k.get("standard"))
     # Zähler im Schlüssel: nach dem Speichern frische Eingabefelder mit den gespeicherten Werten
     praefix = f"kat_{wahl}_{st.session_state.setdefault('kategorie_generation', 0)}"
     _kat_feld_init(praefix, k)
 
+    st.divider()
     st.subheader("Neue Kategorie" if wahl == _NEU else k["name"])
     st.text_input("Name der Kategorie", key=f"{praefix}_name", disabled=standard or not darf,
                   help="Standard-Kategorien sind im Code verankert und behalten ihren Namen.")
@@ -849,11 +983,22 @@ def zeige_kategorien():
                  horizontal=True, disabled=not darf)
 
     if darf:
-        spalte_speichern, spalte_loeschen = st.columns([1, 1])
-        if spalte_speichern.button("Speichern", type="primary", icon=":material/save:"):
+        knoepfe = st.columns(4)
+        if knoepfe[0].button("Speichern", type="primary", icon=":material/save:", width="stretch"):
             _kategorie_sichern(wahl, k, praefix)
-        if not standard and wahl != _NEU:
-            with spalte_loeschen.popover("Löschen", icon=":material/delete:"):
+        if knoepfe[1].button(
+            "Testen", icon=":material/science:", width="stretch",
+            help="Probelauf: Die KI liest eure Beispielbelege einmal mit der bisherigen und einmal mit der "
+                 "neuen Beschreibung (so, wie sie gerade hier steht). So siehst du **vor dem Speichern**, ob "
+                 "deine Änderung die Erkennung verbessert. Es wird dabei nichts gespeichert.",
+        ):
+            _probelauf_dialog(wahl, k, praefix)
+        if wahl == _NEU:
+            if knoepfe[2].button("Abbrechen", icon=":material/close:", width="stretch"):
+                _kategorie_auswahl_setzen(None)
+                st.rerun()
+        elif not standard:
+            with knoepfe[2].popover("Löschen", icon=":material/delete:", width="stretch"):
                 st.write(f"„{k['name']}“ wirklich löschen? Sie wird nicht mehr verwendet. "
                          "Frühere Versionen bleiben im Verlauf erhalten.")
                 if st.button("Ja, löschen", type="primary"):
@@ -877,8 +1022,24 @@ def zeige_kategorien():
             else:
                 st.caption("Noch nicht in der App geändert.")
 
-    if darf:
-        _zeige_testlauf(wahl, k, praefix)
+    # Ergebnis eines Probelaufs bleibt nach dem Schließen des Fensters sichtbar
+    ergebnis = ss.get(f"testlauf_{wahl}")
+    if ergebnis:
+        with st.expander("Letzter Probelauf", expanded=True):
+            _zeige_testergebnis(ergebnis)
+
+
+def _kategorie_auswahl_setzen(schluessel_neu: str | None) -> None:
+    """Auswahl im Code ändern (nach Speichern/Löschen/Abbrechen): Tabelle neu aufbauen, eigene Auswahl setzen."""
+    ss = st.session_state
+    ss["kategorie_aktiv"] = schluessel_neu
+    ss["kategorie_tabelle_letzte"] = None
+    ss["kategorie_tabelle_gen"] = ss.get("kategorie_tabelle_gen", 0) + 1
+
+
+@st.dialog("Probelauf: Hilft meine Änderung?", width="large")
+def _probelauf_dialog(wahl: str, k: dict, praefix: str) -> None:
+    _zeige_testlauf(wahl, k, praefix)
 
 
 def _kategorie_aus_formular(schluessel: str, name: str, praefix: str) -> dict:
@@ -907,11 +1068,12 @@ def _standard_ordner(name: str, ordner: list[str]) -> int:
 
 
 def _zeige_testlauf(wahl: str, k: dict, praefix: str) -> None:
-    st.subheader("Testlauf mit Beispielbelegen")
-    st.caption(
-        "Analysiert die Beispielbelege aus „Anlage KI Assistent/<Ordner>“ zweimal: mit dem gespeicherten Stand "
-        "und mit dem Stand oben im Formular (auch ungespeichert). So siehst du vor dem Aktivieren, ob die "
-        "Änderung hilft. Kosten: unter 0,1 Cent pro Beleg und Durchlauf."
+    st.markdown(
+        "Die KI liest eure Beispielbelege zweimal – mit der **bisherigen** und mit der **neuen** Beschreibung "
+        "(so, wie sie gerade im Formular steht). Danach siehst du, welche besser funktioniert.",
+        help="Es wird dabei nichts gespeichert und nichts verändert. Dauer: etwa 2–4 Minuten. Kosten: "
+             "insgesamt nur wenige Cent. Die Beispielbelege liegen in Google Drive im Ordner "
+             "„Anlage KI Assistent“ und dort im passenden Unterordner.",
     )
     name = (k.get("name") or st.session_state.get(f"{praefix}_name", "")).strip()
     try:
@@ -924,13 +1086,16 @@ def _zeige_testlauf(wahl: str, k: dict, praefix: str) -> None:
     if not optionen:
         st.info("Bitte zuerst einen Namen für die Kategorie eingeben.")
         return
-    gewaehlt = st.selectbox("Beispielordner", optionen, index=_standard_ordner(name, ordner) if ordner else 0,
-                            key=f"{praefix}_testordner")
+    gewaehlt = st.selectbox("Welche Beispielbelege sollen genutzt werden? (Ordner in Google Drive)", optionen,
+                            index=_standard_ordner(name, ordner) if ordner else 0, key=f"{praefix}_testordner")
     ordnername = name if gewaehlt == neuer else gewaehlt
     belege = beispielbelege(ordnername) if gewaehlt != neuer else []
     st.caption(f"{len(belege)} Beispielbeleg(e) im Ordner „{ordnername}“"
                + (f" – getestet werden die ersten {MAX_TESTBELEGE}." if len(belege) > MAX_TESTBELEGE else "."))
 
+    upload_ok = st.session_state.pop(f"{praefix}_upload_ok", None)
+    if upload_ok:
+        st.success(upload_ok, icon=":material/check_circle:")
     neue = st.file_uploader("Beispielbelege hinzufügen", type=["pdf", "jpg", "jpeg", "png"],
                             accept_multiple_files=True, key=f"{praefix}_testupload")
     if neue and st.button(f"{len(neue)} Datei(en) in „{ordnername}“ hochladen", icon=":material/upload:"):
@@ -940,13 +1105,12 @@ def _zeige_testlauf(wahl: str, k: dict, praefix: str) -> None:
         except Exception as e:
             st.error(f"Hochladen fehlgeschlagen: {e}")
         else:
-            st.session_state["kategorie_meldung"] = f"{len(neue)} Beispielbeleg(e) in „{ordnername}“ abgelegt."
-            st.session_state["kategorie_generation"] = st.session_state.get("kategorie_generation", 0) + 1
-            st.rerun()
+            st.session_state[f"{praefix}_upload_ok"] = f"{len(neue)} Beispielbeleg(e) in „{ordnername}“ abgelegt."
+            st.rerun(scope="fragment")  # nur das Fenster neu aufbauen, nicht schließen
 
     if not belege:
         return
-    if st.button("Testlauf starten (vorher / nachher)", type="primary", icon=":material/science:"):
+    if st.button("Probelauf starten", type="primary", icon=":material/science:"):
         schluessel = wahl if wahl != _NEU else kat_schluessel(name)
         entwurf = {**KAT_STAND, schluessel: {**KAT_STAND.get(schluessel, {}),
                                              **_kategorie_aus_formular(schluessel, name, praefix),
@@ -957,15 +1121,15 @@ def _zeige_testlauf(wahl: str, k: dict, praefix: str) -> None:
             varianten = {"nachher": nachher}  # nichts geändert -> nur ein Durchlauf
         auswahl = belege[:MAX_TESTBELEGE]
         kategorien_registrieren({**labels(KAT_STAND), schluessel: name})  # neue Kategorie für den Test gültig
-        balken = st.progress(0.0, text="Testlauf läuft …")
+        balken = st.progress(0.0, text="Probelauf läuft …")
         try:
             daten = [(b["name"], beispielbeleg_laden(b["ref"]), b["mime"]) for b in auswahl]
             ergebnisse = testlauf_ausfuehren(
                 daten, varianten,
-                fortschritt=lambda f, g: balken.progress(f / g, text=f"Testlauf: {f} von {g} Analysen fertig"),
+                fortschritt=lambda f, g: balken.progress(f / g, text=f"Probelauf: {f} von {g} Lesungen fertig"),
             )
         except Exception as e:
-            st.error(f"Testlauf fehlgeschlagen: {e}")
+            st.error(f"Probelauf fehlgeschlagen: {e}")
             return
         finally:
             kategorien_registrieren(labels(KAT_STAND))
@@ -978,18 +1142,56 @@ def _zeige_testlauf(wahl: str, k: dict, praefix: str) -> None:
         _zeige_testergebnis(ergebnis)
 
 
+_VARIANTE_TITEL = {"vorher": "Bisherige Beschreibung", "nachher": "Neue Beschreibung"}
+
+
+def _testlauf_fazit(vorher: dict, nachher: dict) -> tuple[str, str]:
+    """-> (Art: success/warning/info, verständlicher Satz)."""
+    d_erkannt = nachher["erkannt"] - vorher["erkannt"]
+    d_nachfragen = nachher["nachfragen"] - vorher["nachfragen"]
+    if d_erkannt == 0 and d_nachfragen == 0:
+        return "info", "**Kein Unterschied.** Beide Beschreibungen liefern bei den Beispielbelegen dasselbe Ergebnis."
+
+    def belege(n):
+        return "1 Beleg" if n == 1 else f"{n} Belege"
+
+    teile = []
+    if d_erkannt:
+        teile.append(f"{belege(abs(d_erkannt))} {'mehr' if d_erkannt > 0 else 'weniger'} richtig erkannt")
+    if d_nachfragen:
+        teile.append(f"{belege(abs(d_nachfragen))} {'mehr' if d_nachfragen > 0 else 'weniger'} müssten "
+                     "nachgefragt werden")
+    satz = "Mit der neuen Beschreibung: " + " und ".join(teile) + "."
+    if abs(d_erkannt) + abs(d_nachfragen) <= 1:
+        satz += (" Ein Unterschied von nur einem Beleg kann auch Zufall sein – im Zweifel den Probelauf "
+                 "noch einmal starten.")
+    # Richtig erkennen ist wichtiger als wenige Rückfragen
+    besser = d_erkannt > 0 or (d_erkannt == 0 and d_nachfragen < 0)
+    if besser:
+        return "success", "**Die Änderung hilft.** " + satz
+    return "warning", "**Eher nicht speichern.** " + satz
+
+
 def _zeige_testergebnis(t: dict) -> None:
     ergebnisse, varianten, erwartet = t["ergebnisse"], t["varianten"], t["erwartet"]
-    spalten = st.columns(len(varianten))
-    for spalte, v in zip(spalten, varianten):
-        z = testlauf_zusammenfassung(ergebnisse, v, erwartet)
-        titel = {"vorher": "Gespeicherter Stand", "nachher": "Stand im Formular"}[v]
-        spalte.markdown(f"**{titel}**")
+    if varianten == ["nachher"]:
+        st.info("Die Beschreibung oben ist unverändert – deshalb wurde nur einmal gelesen.",
+                icon=":material/info:")
+    zahlen = {v: testlauf_zusammenfassung(ergebnisse, v, erwartet) for v in varianten}
+    for spalte, v in zip(st.columns(len(varianten)), varianten):
+        z = zahlen[v]
+        spalte.markdown(f"**{_VARIANTE_TITEL[v]}**")
         spalte.markdown(
-            f"- Als „{t['name']}“ erkannt: **{z['erkannt']} von {z['belege']}**\n"
-            f"- Zur Nachfrage: **{z['nachfragen']} von {z['belege']}**"
-            + (f"\n- Fehler: **{z['fehler']}**" if z["fehler"] else "")
+            f"- Richtig als „{t['name']}“ erkannt: **{z['erkannt']} von {z['belege']}**\n"
+            f"- Müssten nachgefragt werden: **{z['nachfragen']} von {z['belege']}**"
+            + (f"\n- Konnten nicht gelesen werden: **{z['fehler']}**" if z["fehler"] else "")
         )
+    if len(varianten) == 2:
+        art, text = _testlauf_fazit(zahlen["vorher"], zahlen["nachher"])
+        getattr(st, art)(text, icon={"success": ":material/thumb_up:", "warning": ":material/thumb_down:",
+                                     "info": ":material/drag_handle:"}[art])
+    st.caption("Grün = KI ist sicher, rot = müsste nachgefragt werden, grau = Datei nicht lesbar. "
+               "✓ = als diese Kategorie erkannt, ✗ = als andere Kategorie erkannt.")
 
     def zelle(e) -> str:
         if e is None:
@@ -1004,18 +1206,18 @@ def _zeige_testergebnis(t: dict) -> None:
     for name, je_variante in ergebnisse.items():
         zeile = {"Beleg": name}
         for v in varianten:
-            zeile[{"vorher": "Vorher", "nachher": "Nachher"}[v]] = zelle(je_variante.get(v))
+            zeile[_VARIANTE_TITEL[v]] = zelle(je_variante.get(v))
         if len(varianten) == 2:
             a, b = je_variante.get("vorher"), je_variante.get("nachher")
             geaendert = a and b and (a.kategorie != b.kategorie or a.nachfrage != b.nachfrage)
-            zeile["Änderung"] = "geändert" if geaendert else "–"
+            zeile["Unterschied"] = "anders" if geaendert else "–"
         zeilen.append(zeile)
-    _tabelle(zeilen)
-    with st.expander("Nachfragegründe im Detail"):
+    _farbtabelle(zeilen, [_VARIANTE_TITEL[v] for v in varianten])
+    with st.expander("Warum müsste nachgefragt werden? (Details)"):
         for name, je_variante in ergebnisse.items():
             for v, e in je_variante.items():
                 if e.gruende:
-                    st.markdown(f"**{name}** ({v}): " + "; ".join(e.gruende))
+                    st.markdown(f"**{name}** ({_VARIANTE_TITEL[v]}): " + "; ".join(e.gruende))
 
 
 def _kategorie_sichern(wahl: str, k: dict, praefix: str, loeschen: bool = False) -> None:
@@ -1047,9 +1249,7 @@ def _kategorie_sichern(wahl: str, k: dict, praefix: str, loeschen: bool = False)
     except Exception as e:
         hinweis = f" (Dokument im Drive konnte nicht aktualisiert werden: {e})"
     ss["kategorie_generation"] = ss.get("kategorie_generation", 0) + 1
-    if wahl == _NEU or loeschen:
-        ss["kategorie_wahl_naechste"] = None if loeschen else schluessel
-        ss.pop("kategorie_neu_modus", None)
+    _kategorie_auswahl_setzen(None if loeschen else schluessel)
     aktion = "gelöscht" if loeschen else f"gespeichert (Version {eintrag['version']}, {eintrag['status']})"
     ss["kategorie_meldung"] = f"„{name}“ {aktion}.{hinweis}"
     st.rerun()
@@ -1060,14 +1260,15 @@ def _kategorie_sichern(wahl: str, k: dict, praefix: str, loeschen: bool = False)
 # ---------------------------------------------------------------------------
 
 def _zustand_zuruecksetzen():
-    for k in ("ergebnis", "fehler", "gespeichert"):
+    for k in ("ergebnis", "fehler", "stapel"):
         st.session_state.pop(k, None)
 
 
-# Tabs farbig absetzen: jede Ansicht hat ihre Farbe (Rand), der aktive Tab ist gefüllt.
-# Alle Füllfarben haben mit weißer Schrift mind. 4,5:1 Kontrast (WCAG AA), in hell und dunkel.
-# (Füllung aktiver Tab, Rand) je Tab: Analyse, Nachfragen, Kategorien, Auswertung. Rand hell -> > 3:1 auf Dunkel.
-_TAB_FARBEN = [("#2F6FDB", "#60A5FA"), ("#B45309", "#F59E0B"), ("#7C3AED", "#A78BFA"), ("#15803D", "#4ADE80")]
+# Tabs farbig absetzen (RE-ALIS-Farben): jede Ansicht hat ihre Farbe (Rand), der aktive Tab ist gefüllt.
+# Alle Füllfarben mit weißer Schrift >= 4,5:1 (WCAG AA), als Rand auf hellem Grund >= 3:1.
+# (Füllung aktiver Tab, Rand) je Tab: Analyse (Marken-Orange), Nachfragen (Marken-Blau), Kategorien
+# (Schiefer aus der Firmenseite), Auswertung (Grün).
+_TAB_FARBEN = [("#C25100", "#C25100"), ("#036BD3", "#036BD3"), ("#373A43", "#373A43"), ("#15803D", "#15803D")]
 # Selektoren passend zu Streamlit 1.67 (react-aria-Tabs): role="tablist"/"tab", aktiv = [data-selected].
 _TAB = '.stTabs [role="tab"]'
 st.markdown(
@@ -1100,7 +1301,7 @@ def _offene_nachfragen() -> int | None:
         return None
 
 
-st.title("Beleg-Klassifizierung – PoC")
+st.title("Beleg-Klassifizierung")
 _offen = _offene_nachfragen()
 tab_analyse, tab_nachfragen, tab_kategorien, tab_auswertung = st.tabs([
     ":material/upload_file: Beleg analysieren",
@@ -1111,26 +1312,46 @@ tab_analyse, tab_nachfragen, tab_kategorien, tab_auswertung = st.tabs([
 
 with tab_analyse:
     st.caption(
-        "Lade einen Beleg hoch. Die KI ordnet ihn ein (Bewirtung, Tanken, Übernachtung, ...), liest die Daten ab, "
-        "der Code rechnet nach. Unklare Belege landen automatisch unter „Nachfragen“. "
-        "Danach bitte unten bewerten, was richtig erkannt wurde."
+        "Lade einen oder mehrere Belege hoch. Die KI ordnet sie ein (Bewirtung, Tanken, Übernachtung, ...), "
+        "liest die Daten ab, der Code rechnet nach. Unklare Belege landen automatisch unter „Nachfragen“. "
+        "Danach bitte bewerten, was richtig erkannt wurde."
     )
     uploads = st.file_uploader(
-        "Beleg hochladen (JPG, PNG, PDF)",
+        "Belege hochladen (JPG, PNG, PDF)",
         type=["jpg", "jpeg", "png", "pdf"],
         accept_multiple_files=True,
-        help="Mehrere Dateien werden als EIN Beleg gelesen, z. B. Rechnung + EC-Beleg oder mehrere Fotos "
-             f"einer langen Rechnung. Mehrseitige PDFs werden vollständig gelesen (bis {MAX_SEITEN} Seiten).",
+        help=f"Mehrere Dateien auf einmal möglich (bis {MAX_STAPEL}). Mehrseitige PDFs werden vollständig "
+             f"gelesen (bis {MAX_SEITEN} Seiten).",
     )
+
+    stapel_modus = False
+    if uploads and len(uploads) > 1:
+        modus = st.radio(
+            "Wie sollen die Dateien gelesen werden?",
+            ["stapel", "ein_beleg"],
+            format_func={
+                "stapel": f"Jede Datei ist ein eigener Beleg (Stapel, {len(uploads)} Belege)",
+                "ein_beleg": "Alle Dateien gehören zu EINEM Beleg (z. B. Rechnung + EC-Beleg, mehrere Fotos)",
+            }.get,
+            key="upload_modus",
+        )
+        stapel_modus = modus == "stapel"
+        if stapel_modus and len(uploads) > MAX_STAPEL:
+            st.warning(f"Es werden die ersten {MAX_STAPEL} von {len(uploads)} Dateien analysiert.")
 
     if not uploads:
         _zustand_zuruecksetzen()  # Dateien entfernt -> alten Zustand verwerfen
     else:
-        erg = st.session_state.get("ergebnis")
-        if erg and erg["sha"] != beleg_hash(_dateien(uploads)):
-            _zustand_zuruecksetzen()  # andere Dateien -> altes Ergebnis passt nicht mehr
+        # andere Dateien oder anderer Modus -> alte Ergebnisse passen nicht mehr
+        kennung = (stapel_modus, beleg_hash(_dateien(uploads)))
+        if st.session_state.get("upload_kennung") != kennung:
+            _zustand_zuruecksetzen()
+            st.session_state["upload_kennung"] = kennung
 
-        if st.button("Beleg analysieren", type="primary"):
+        if stapel_modus:
+            if st.button(f"{min(len(uploads), MAX_STAPEL)} Belege analysieren", type="primary"):
+                stapel_starten(uploads)
+        elif st.button("Beleg analysieren", type="primary"):
             analyse_starten(uploads)  # zeigt den Fortschritt selbst an (st.status)
 
     if "fehler" in st.session_state:
@@ -1139,7 +1360,9 @@ with tab_analyse:
         if raw:
             st.code(raw)
 
-    if "ergebnis" in st.session_state:
+    if "stapel" in st.session_state:
+        zeige_stapel(st.session_state["stapel"])
+    elif "ergebnis" in st.session_state:
         zeige_ergebnis(st.session_state["ergebnis"])
 
 with tab_nachfragen:
