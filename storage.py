@@ -82,15 +82,15 @@ def ablage_pruefen() -> None:
 # ---------------------------------------------------------------------------
 
 @st.cache_resource
-def _drive_credentials():
+def _drive_credentials(refresh_token: str, client_id: str, client_secret: str):
+    """Pro Token-Kombination gecacht -> ein neuer refresh_token in den Secrets greift ohne Neustart."""
     from google.oauth2.credentials import Credentials
 
-    cfg = _drive_config()
     return Credentials(
         token=None,
-        refresh_token=cfg["refresh_token"],
-        client_id=cfg["client_id"],
-        client_secret=cfg["client_secret"],
+        refresh_token=refresh_token,
+        client_id=client_id,
+        client_secret=client_secret,
         token_uri="https://oauth2.googleapis.com/token",
         scopes=DRIVE_SCOPES,
     )
@@ -100,7 +100,9 @@ def _drive():
     # Pro Aufruf neu bauen: der HTTP-Client ist nicht thread-sicher, Streamlit-Sessions laufen parallel.
     from googleapiclient.discovery import build
 
-    return build("drive", "v3", credentials=_drive_credentials(), cache_discovery=False)
+    cfg = _drive_config()
+    creds = _drive_credentials(cfg["refresh_token"], cfg["client_id"], cfg["client_secret"])
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
