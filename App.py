@@ -767,17 +767,29 @@ def zeige_kategorien():
         "Zuletzt geändert": f"{zeitpunkt_de(k.get('zeitpunkt'))} {k.get('bearbeiter') or ''}".strip() or "–",
     } for k in sichtbare.values()])
 
-    optionen = ([_NEU] if darf else []) + list(sichtbare)
-    if "kategorie_wahl_naechste" in st.session_state:  # nach dem Speichern: neue Kategorie auswählen
-        st.session_state["kategorie_wahl"] = st.session_state.pop("kategorie_wahl_naechste")
-    if st.session_state.get("kategorie_wahl") not in optionen:
-        st.session_state.pop("kategorie_wahl", None)
-    wahl = st.selectbox(
-        "Kategorie zum Ansehen/Bearbeiten",
+    ss = st.session_state
+    optionen = list(sichtbare)
+    if "kategorie_wahl_naechste" in ss:  # nach dem Speichern/Löschen: passende Kategorie auswählen
+        naechste = ss.pop("kategorie_wahl_naechste")
+        if naechste:
+            ss["kategorie_wahl"] = naechste
+    if ss.get("kategorie_wahl") not in optionen:
+        ss.pop("kategorie_wahl", None)
+
+    spalte_liste, spalte_neu = st.columns([3, 1], vertical_alignment="bottom")
+    auswahl = spalte_liste.selectbox(
+        "Kategorie ansehen oder bearbeiten",
         optionen,
-        format_func=lambda key: "+ Neue Kategorie anlegen" if key == _NEU else sichtbare[key]["name"],
+        format_func=lambda key: sichtbare[key]["name"],
         key="kategorie_wahl",
+        on_change=lambda: ss.pop("kategorie_neu_modus", None),  # Auswahl beendet "neu anlegen"
     )
+    if darf and spalte_neu.button("Neue Kategorie", icon=":material/add:", type="primary", width="stretch"):
+        ss["kategorie_neu_modus"] = True
+    wahl = _NEU if darf and ss.get("kategorie_neu_modus") else auswahl
+    if wahl == _NEU and st.button("Abbrechen", icon=":material/close:"):
+        ss.pop("kategorie_neu_modus", None)
+        st.rerun()
     k = {} if wahl == _NEU else sichtbare[wahl]
     standard = bool(k.get("standard"))
     # Zähler im Schlüssel: nach dem Speichern frische Eingabefelder mit den gespeicherten Werten
@@ -1036,7 +1048,8 @@ def _kategorie_sichern(wahl: str, k: dict, praefix: str, loeschen: bool = False)
         hinweis = f" (Dokument im Drive konnte nicht aktualisiert werden: {e})"
     ss["kategorie_generation"] = ss.get("kategorie_generation", 0) + 1
     if wahl == _NEU or loeschen:
-        ss["kategorie_wahl_naechste"] = _NEU if loeschen else schluessel
+        ss["kategorie_wahl_naechste"] = None if loeschen else schluessel
+        ss.pop("kategorie_neu_modus", None)
     aktion = "gelöscht" if loeschen else f"gespeichert (Version {eintrag['version']}, {eintrag['status']})"
     ss["kategorie_meldung"] = f"„{name}“ {aktion}.{hinweis}"
     st.rerun()
@@ -1051,10 +1064,50 @@ def _zustand_zuruecksetzen():
         st.session_state.pop(k, None)
 
 
-st.title("Beleg-Klassifizierung – PoC")
-tab_analyse, tab_nachfragen, tab_kategorien, tab_auswertung = st.tabs(
-    ["Beleg analysieren", "Nachfragen", "Kategorien", "Auswertung"]
+# Tabs farbig absetzen: jede Ansicht hat ihre Farbe (Rand), der aktive Tab ist gefüllt.
+# Alle Füllfarben haben mit weißer Schrift mind. 4,5:1 Kontrast (WCAG AA), in hell und dunkel.
+# (Füllung aktiver Tab, Rand) je Tab: Analyse, Nachfragen, Kategorien, Auswertung. Rand hell -> > 3:1 auf Dunkel.
+_TAB_FARBEN = [("#2F6FDB", "#60A5FA"), ("#B45309", "#F59E0B"), ("#7C3AED", "#A78BFA"), ("#15803D", "#4ADE80")]
+# Selektoren passend zu Streamlit 1.67 (react-aria-Tabs): role="tablist"/"tab", aktiv = [data-selected].
+_TAB = '.stTabs [role="tab"]'
+st.markdown(
+    "<style>"
+    '.stTabs [role="tablist"] {gap: .5rem; padding: .4rem; border-radius: .75rem; flex-wrap: wrap;'
+    " background: rgba(128,128,128,.14);}"
+    '.stTabs [role="tablist"]::after {display: none;}'  # graue Grundlinie ausblenden
+    f"{_TAB} {{padding: .5rem 1.1rem; border-radius: .55rem; height: auto; border: 2px solid transparent;"
+    " font-weight: 600; color: inherit;}"
+    f"{_TAB} p {{font-size: 1rem;}}"
+    f"{_TAB} .react-aria-SelectionIndicator {{display: none;}}"  # Unterstrich ersetzt durch Füllung
+    + "".join(
+        f"{_TAB}:nth-child({i}) {{border-color: {rand};}}"
+        f"{_TAB}:nth-child({i})[data-hovered]:not([data-selected]) {{background: {fuellung}55; color: inherit;}}"
+        f"{_TAB}:nth-child({i})[data-selected] {{background: {fuellung}; color: #fff;}}"
+        f"{_TAB}:nth-child({i})[data-selected] p {{color: #fff;}}"
+        for i, (fuellung, rand) in enumerate(_TAB_FARBEN, start=1)
+    )
+    + "</style>",
+    unsafe_allow_html=True,
 )
+
+
+def _offene_nachfragen() -> int | None:
+    try:
+        letzte = _letzte_entscheidungen(entscheidungen_laden())
+        return sum(1 for n in nachfragen_laden()
+                   if letzte.get(n.get("datei_sha256"), {}).get("status", "offen") == "offen")
+    except Exception:
+        return None
+
+
+st.title("Beleg-Klassifizierung – PoC")
+_offen = _offene_nachfragen()
+tab_analyse, tab_nachfragen, tab_kategorien, tab_auswertung = st.tabs([
+    ":material/upload_file: Beleg analysieren",
+    ":material/help: Nachfragen" + (f" ({_offen} offen)" if _offen else ""),
+    ":material/category: Kategorien",
+    ":material/monitoring: Auswertung",
+])
 
 with tab_analyse:
     st.caption(

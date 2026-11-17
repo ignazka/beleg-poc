@@ -1,6 +1,11 @@
-# Oberfläche: kontraststarke Akzentfarbe (WCAG AA auf Weiß), sonst Streamlit-Standard (hell/dunkel nach System)
+# Oberfläche: dunkles Design als Standard. Hell lässt sich weiterhin im Menü (⋮ → Settings) wählen.
+# Farben mit ausreichendem Kontrast (WCAG AA): Text auf Hintergrund > 12:1, weiße Schrift auf Akzent > 4,5:1.
 [theme]
-primaryColor = "#1F4E9A"
+base = "dark"
+primaryColor = "#2F6FDB"
+backgroundColor = "#0F141C"
+secondaryBackgroundColor = "#1A2230"
+textColor = "#E6EAF0"
 
 [client]
 toolbarMode = "viewer"
