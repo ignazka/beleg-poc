@@ -351,6 +351,31 @@ def _pruefzeile(name: str, ok: bool) -> str:
     return f"- {':material/check_circle:' if ok else ':material/cancel:'} {name}: **{'ja' if ok else 'nein'}**"
 
 
+_VORSCHAU_SEITEN = 3  # mehr Seiten nur in der großen Ansicht
+
+
+@st.dialog("Beleg in voller Größe", width="large")
+def _beleg_gross(bilder: list[bytes], titel: str) -> None:
+    st.caption(titel)
+    for i, bild in enumerate(bilder, start=1):
+        st.image(bild, width="stretch", caption=f"Seite {i} von {len(bilder)}")
+
+
+def _beleg_vorschau(bilder: list[bytes], titel: str, key: str) -> None:
+    """Kompakte Vorschau (Höhe begrenzt, mehrere Seiten nebeneinander) + Button für die große Ansicht."""
+    if not bilder:
+        return
+    n = len(bilder)
+    with st.container(key=f"belegbild_{key}"):
+        spalten = st.columns(min(n, _VORSCHAU_SEITEN)) if n > 1 else [st.container()]
+        for i, (spalte, bild) in enumerate(zip(spalten, bilder), start=1):
+            spalte.image(bild, caption=f"Seite {i} von {n}" if n > 1 else None)
+    if n > _VORSCHAU_SEITEN:
+        st.caption(f"+ {n - _VORSCHAU_SEITEN} weitere Seite(n) in der großen Ansicht")
+    if st.button("Größer ansehen", icon=":material/zoom_in:", key=f"gross_{key}"):
+        _beleg_gross(bilder, titel)
+
+
 def _zeige_kalender(k: dict) -> None:
     """Ergebnis des Kalenderabgleichs (auch für gespeicherte Nachfragen, daher als dict)."""
     if not k or k["status"] == "nicht_noetig":
@@ -403,9 +428,7 @@ def zeige_ergebnis(erg):
             st.warning(f"{gesamt} Seiten – nur die ersten {gelesen} wurden gelesen (Obergrenze {MAX_SEITEN}).")
         else:
             st.caption(f"{gesamt} Seite(n) aus {len(erg['dateien'])} Datei(en): {erg['dateiname']}")
-        n = len(erg["vorschau"])
-        for i, bild in enumerate(erg["vorschau"], start=1):
-            st.image(bild, width="stretch", caption=f"Beleg, Seite {i} von {n}")
+        _beleg_vorschau(erg["vorschau"], erg["dateiname"], f"analyse_{erg['sha']}")
 
     # 3. Ergebnis
     with col_daten:
@@ -736,7 +759,7 @@ def _bewertete_belege_durchsehen(eintraege: list[dict]) -> None:
     col_bild, col_daten = st.columns([2, 3], gap="large")
     with col_bild:
         st.markdown("**Beleg**")
-        _belegbilder(e)
+        _belegbilder(e, "auswertung")
 
     with col_daten:
         k = e["kategorie"]
@@ -790,18 +813,18 @@ def _vorschau(pfad: str) -> list[bytes]:
     return dateien_zu_bildern([(pfad, daten, _MIME.get(endung, "image/jpeg"))])[0]
 
 
-def _belegbilder(eintrag: dict) -> None:
+def _belegbilder(eintrag: dict, bereich: str) -> None:
     pfade = eintrag.get("beleg_pfade") or ([eintrag["beleg_pfad"]] if eintrag.get("beleg_pfad") else [])
     if not pfade:
         st.caption("Zu diesem Eintrag ist kein Original gespeichert.")
+    bilder = []
     for pfad in pfade:
         try:
-            bilder = _vorschau(pfad)
+            bilder += _vorschau(pfad)
         except Exception as e:
             st.warning(f"{pfad} konnte nicht geladen werden: {e}")
-            continue
-        for i, bild in enumerate(bilder, start=1):
-            st.image(bild, width="stretch", caption=f"{pfad}, Seite {i} von {len(bilder)}")
+    _beleg_vorschau(bilder, eintrag.get("dateiname") or ", ".join(pfade),
+                    f"{bereich}_{eintrag.get('datei_sha256') or 'ohne_hash'}")
 
 
 def _gegenueberstellung(e: dict) -> None:
@@ -913,7 +936,7 @@ def _nachfrage_bearbeiten(n: dict, letzte: dict | None):
     col_bild, col_form = st.columns([2, 3], gap="large")
     with col_bild:
         st.subheader("Beleg")
-        _belegbilder(n)
+        _belegbilder(n, "nachfrage")
 
     with col_form:
         if erledigt:
@@ -1426,6 +1449,7 @@ _TAB_FARBEN = [("#C25100", "#C25100"), ("#036BD3", "#036BD3"), ("#373A43", "#373
 _TAB = '.stTabs [role="tab"]'
 st.markdown(
     "<style>"
+    '[class*="st-key-belegbild_"] img {max-height: 560px; width: auto; max-width: 100%; object-fit: contain;}'
     '.stTabs [role="tablist"] {gap: .5rem; padding: .4rem; border-radius: .75rem; flex-wrap: wrap;'
     " background: rgba(128,128,128,.14);}"
     '.stTabs [role="tablist"]::after {display: none;}'  # graue Grundlinie ausblenden
