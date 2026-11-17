@@ -1,5 +1,6 @@
 """Praktikant-AI (RE-ALIS) – Belege analysieren, Nachfragen, Kategorien, Auswertung."""
 
+from datetime import datetime
 import csv
 import html
 import io
@@ -10,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import streamlit as st
 
 from auth import aktueller_benutzer, darf_kategorien_bearbeiten, login_erzwingen
-from beleg_schema import FEEDBACK_FELDER, KATEGORIEN, BelegAnalyse, kategorien_registrieren, anzeige, normalisieren, werte_gleich, zeitpunkt_de
+from beleg_schema import FEEDBACK_FELDER, KATEGORIEN, STANDARD_KATEGORIEN, BelegAnalyse, kategorien_registrieren, anzeige, normalisieren, werte_gleich, zeitpunkt_de
 from datenschutz import ist_datenschutzseite, zeige_datenschutz
 from extraction import MAX_SEITEN, MODEL, MODEL_GROSS, AnalyseFehler, dateien_zu_bildern, text_anfrage_json
 from pipeline import beleg_lesen
@@ -315,7 +316,7 @@ def _status_von(text) -> str | None:
     t = str(text).casefold()
     if "fehler" in t:
         return "fehler"
-    if "nachfrage" in t:
+    if "nachfrage" in t or "korrigiert" in t:
         return "nachfrage"
     if t.endswith("ok") or "stimmig" in t:
         return "ok"
@@ -603,115 +604,183 @@ def _feedback_ablegen(erg, analyse, kat_korrekt, felder, hinweise_ok, kommentar,
 # Auswertung
 # ---------------------------------------------------------------------------
 
+def _juengste_bewertungen(eintraege: list[dict]) -> list[dict]:
+    """Pro Beleg (Datei-Hash) nur die jüngste Bewertung – sonst zählt ein mehrfach bewerteter Beleg doppelt."""
+    juengste = {}
+    for e in sorted(eintraege, key=lambda e: e.get("zeitpunkt") or ""):
+        juengste[e.get("datei_sha256") or id(e)] = e
+    return list(juengste.values())
+
+
+def _feld_fehler(e: dict) -> list[str]:
+    return [key for key, f in (e.get("felder") or {}).items() if not f.get("richtig")]
+
+
+def _fehlerfrei(e: dict) -> bool:
+    return e["kategorie"]["richtig"] and not _feld_fehler(e)
+
+
 def zeige_auswertung():
+    st.caption(
+        "Wie gut erkennt die KI eure Belege? Gezählt werden alle Belege, die ein Mensch bewertet hat – über das "
+        "Feedback nach einer Analyse oder über eine Korrektur im Tab „Nachfragen“. Jeder Beleg zählt einmal "
+        "(mit seiner jüngsten Bewertung)."
+    )
     try:
-        eintraege = feedback_laden()
+        alle = feedback_laden()
     except Exception as e:
         st.error(f"Feedback konnte nicht geladen werden: {e}")
         return
-    if not eintraege:
-        st.info("Noch kein Feedback vorhanden. Lade Belege hoch und bewerte die Ergebnisse.")
+    if not alle:
+        st.info("Noch keine bewerteten Belege. Lade Belege hoch und bewerte die Ergebnisse.")
         return
 
-    versionen = sorted({e.get("prompt_version", "?") for e in eintraege}, reverse=True)
-    modelle = sorted({e.get("modell", "?") for e in eintraege})
-    f1, f2 = st.columns(2)
-    v_auswahl = f1.multiselect("Prompt-Version", versionen, default=versionen)
-    m_auswahl = f2.multiselect("Modell", modelle, default=modelle)
-    eintraege = [
-        e for e in eintraege
-        if e.get("prompt_version", "?") in v_auswahl and e.get("modell", "?") in m_auswahl
-    ]
+    with st.expander("Filter: Prompt-Version und Modell"):
+        versionen = sorted({e.get("prompt_version") or "?" for e in alle}, reverse=True)
+        modelle = sorted({e.get("modell") or "?" for e in alle})
+        f1, f2 = st.columns(2)
+        v_auswahl = f1.multiselect("Prompt-Version", versionen, default=versionen,
+                                   help="Jede Änderung an Anweisungen oder Kategorien erzeugt eine neue Version.")
+        m_auswahl = f2.multiselect("Modell", modelle, default=modelle)
+    eintraege = _juengste_bewertungen([
+        e for e in alle
+        if (e.get("prompt_version") or "?") in v_auswahl and (e.get("modell") or "?") in m_auswahl
+    ])
     if not eintraege:
         st.warning("Keine Einträge für diese Auswahl.")
         return
 
     n = len(eintraege)
     kat_richtig = sum(1 for e in eintraege if e["kategorie"]["richtig"])
-    komplett = sum(
-        1 for e in eintraege
-        if e["kategorie"]["richtig"] and all(f["richtig"] for f in e["felder"].values())
-    )
-    m1, m2, m3 = st.columns(3)
+    felder_richtig = sum(1 for e in eintraege if not _feld_fehler(e))
+    komplett = sum(1 for e in eintraege if _fehlerfrei(e))
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("Bewertete Belege", n)
-    m2.metric("Kategorie richtig", f"{kat_richtig / n:.0%}")
-    m3.metric("Beleg komplett richtig", f"{komplett / n:.0%}")
+    m2.metric("Belegart richtig", f"{kat_richtig} von {n}", f"{kat_richtig / n:.0%}", delta_color="off", delta_arrow="off",
+              help="Die KI hat die Belegart (Kategorie) gewählt, die auch der Mensch als richtig bestätigt hat.")
+    m3.metric("Alle Felder richtig", f"{felder_richtig} von {n}", f"{felder_richtig / n:.0%}", delta_color="off", delta_arrow="off",
+              help="Kein einziges Feld (Belegnummer, Datum, Beträge, …) musste korrigiert werden. "
+                   "Ein Feld gilt als richtig, wenn es beim Bewerten nicht geändert wurde.")
+    m4.metric("Komplett richtig", f"{komplett} von {n}", f"{komplett / n:.0%}", delta_color="off", delta_arrow="off",
+              help="Belegart richtig UND alle Felder richtig.")
 
-    st.subheader("Trefferquote pro Feld")
-    zeilen = []
-    for key, label, _typ in FEEDBACK_FELDER:
-        werte = [e["felder"][key]["richtig"] for e in eintraege if key in e.get("felder", {})]
-        if werte:
-            zeilen.append({
-                "Feld": label,
-                "Trefferquote": sum(werte) / len(werte),
-                "Richtig": sum(werte),
-                "Falsch": len(werte) - sum(werte),
-            })
-    st.dataframe(
-        zeilen,
-        hide_index=True,
-        width="stretch",
-        column_config={
-            "Trefferquote": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1),
-        },
-    )
+    # Falsche Belegart, weil die richtige Kategorie neu ist? Dann konnte die KI sie evtl. noch nicht kennen.
+    neue_kat = [e for e in eintraege
+                if not e["kategorie"]["richtig"] and e["kategorie"]["korrekt"] not in STANDARD_KATEGORIEN]
+    if neue_kat:
+        namen = sorted({_kategorie_label(e["kategorie"]["korrekt"]) for e in neue_kat})
+        st.info(
+            f"{len(neue_kat)} der {n - kat_richtig} falschen Belegarten betreffen eigene, neu angelegte Kategorien "
+            f"({', '.join(f'„{x}“' for x in namen)}). Wurden die Belege analysiert, bevor die Kategorie aktiv war, "
+            "konnte die KI sie noch nicht kennen – dann ist das kein echter Fehler. Am besten diese Belege nach dem "
+            "Aktivieren noch einmal analysieren.",
+            icon=":material/info:",
+        )
 
-    st.subheader("Kategorien: KI vs. korrekt")
-    matrix = {}
-    for e in eintraege:
-        paar = (_kategorie_label(e["kategorie"]["korrekt"]), _kategorie_label(e["kategorie"]["modell"]))
-        matrix[paar] = matrix.get(paar, 0) + 1
-    st.dataframe(
-        [{"Korrekt": k, "KI sagte": m, "Anzahl": c} for (k, m), c in sorted(matrix.items())],
-        hide_index=True,
-        width="stretch",
-    )
-
-    st.subheader("Fehler im Detail")
-    fehler = []
-    for e in reversed(eintraege):
+    links, rechts = st.columns(2, gap="large")
+    with links:
+        st.markdown("**Trefferquote pro Feld**")
+        zeilen = []
         for key, label, _typ in FEEDBACK_FELDER:
-            f = e["felder"].get(key)
-            if f and not f["richtig"]:
-                fehler.append({
-                    "Zeitpunkt": zeitpunkt_de(e.get("zeitpunkt")),
-                    "Datei": e.get("dateiname"),
-                    "Feld": label,
-                    "KI": anzeige(f["modell"]),
-                    "Korrekt": anzeige(f["korrekt"]),
-                    "Kommentar": e.get("kommentar") or "",
-                })
-    if fehler:
-        st.dataframe(fehler, hide_index=True, width="stretch")
-    else:
-        st.success("Keine Feldfehler in der Auswahl.")
+            werte = [e["felder"][key]["richtig"] for e in eintraege if key in (e.get("felder") or {})]
+            if werte:
+                zeilen.append({"Feld": label, "Trefferquote": sum(werte) / len(werte),
+                               "Richtig": f"{sum(werte)} von {len(werte)}"})
+        st.dataframe(zeilen, hide_index=True, width="stretch", column_config={
+            "Trefferquote": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1)})
+    with rechts:
+        st.markdown("**Trefferquote pro Belegart** (laut Bewertung)")
+        pro_art = {}
+        for e in eintraege:
+            z = pro_art.setdefault(e["kategorie"]["korrekt"], [0, 0])
+            z[0] += e["kategorie"]["richtig"]
+            z[1] += 1
+        st.dataframe([{"Belegart": _kategorie_label(k), "Trefferquote": r / g, "Richtig": f"{r} von {g}"}
+                      for k, (r, g) in sorted(pro_art.items(), key=lambda x: -x[1][1])],
+                     hide_index=True, width="stretch", column_config={
+                         "Belegart": st.column_config.TextColumn(width="medium"),
+                         "Trefferquote": st.column_config.ProgressColumn(format="percent", min_value=0,
+                                                                         max_value=1, width="small"),
+                         "Richtig": st.column_config.TextColumn(width="small")})
+        verwechslungen = [e for e in eintraege if not e["kategorie"]["richtig"]]
+        if verwechslungen:
+            st.caption("Verwechslungen: " + "; ".join(
+                f"„{_kategorie_label(e['kategorie']['modell'])}“ statt „{_kategorie_label(e['kategorie']['korrekt'])}“"
+                for e in verwechslungen))
+
+    st.divider()
+    _bewertete_belege_durchsehen(eintraege)
+
+
+def _bewertete_belege_durchsehen(eintraege: list[dict]) -> None:
+    st.subheader("Bewertete Belege durchsehen")
+    fehlerfrei = [e for e in eintraege if _fehlerfrei(e)]
+    korrigiert = [e for e in eintraege if not _fehlerfrei(e)]
+    ansichten = {"alle": f"Alle ({len(eintraege)})", "fehlerfrei": f"Fehlerfrei ({len(fehlerfrei)})",
+                 "korrigiert": f"Mit Korrekturen ({len(korrigiert)})"}
+    ansicht = st.radio("Anzeigen", list(ansichten), format_func=ansichten.get, horizontal=True,
+                       key="auswertung_ansicht", label_visibility="collapsed")
+    liste = {"alle": eintraege, "fehlerfrei": fehlerfrei, "korrigiert": korrigiert}[ansicht]
+    liste = sorted(liste, key=lambda e: e.get("zeitpunkt") or "", reverse=True)  # neueste zuerst
+    if not liste:
+        st.info("In dieser Ansicht gibt es keine Belege.")
+        return
+
+    def beschriftung(e):
+        fehler = len(_feld_fehler(e)) + (not e["kategorie"]["richtig"])
+        status = "fehlerfrei" if not fehler else f"{fehler} Korrektur(en)"
+        return f"{zeitpunkt_de(e.get('zeitpunkt'))} · {e.get('dateiname')} · {status}"
+
+    e = st.selectbox(f"Beleg auswählen ({len(liste)})", liste, format_func=beschriftung, key="auswertung_beleg")
+
+    col_bild, col_daten = st.columns([2, 3], gap="large")
+    with col_bild:
+        st.markdown("**Beleg**")
+        _belegbilder(e)
+
+    with col_daten:
+        k = e["kategorie"]
+        if k["richtig"]:
+            st.success(f"**Belegart richtig:** {_kategorie_label(k['korrekt'])}", icon=":material/check_circle:")
+        else:
+            st.error(f"**Belegart korrigiert:** KI sagte „{_kategorie_label(k['modell'])}“, richtig ist "
+                     f"„{_kategorie_label(k['korrekt'])}“", icon=":material/cancel:")
+        felder = e.get("felder") or {}
+        _farbtabelle([{
+            "Feld": label,
+            "KI hat gelesen": anzeige(felder[key]["modell"]) or "–",
+            "Richtig ist": anzeige(felder[key]["korrekt"]) or "–",
+            "Status": "ok" if felder[key]["richtig"] else "korrigiert",
+        } for key, label, _typ in FEEDBACK_FELDER if key in felder], ["Status"], ganze_zeile=True)
+        quelle = "Korrektur im Tab „Nachfragen“" if e.get("quelle") == "nachfrage" else "Feedback nach der Analyse"
+        details = [f"Bewertet am {zeitpunkt_de(e.get('zeitpunkt'))} von {e.get('bearbeiter') or e.get('benutzer_email') or '–'}",
+                   f"Quelle: {quelle}", f"Modell: `{e.get('modell') or '–'}` · Prompt-Version: `{e.get('prompt_version') or '–'}`"]
+        if e.get("hinweise_zutreffend"):
+            details.append(f"Hinweise der KI zutreffend: {e['hinweise_zutreffend']}")
+        st.caption("  \n".join(details))
+        if e.get("kommentar"):
+            st.info(f"**Kommentar:** {e['kommentar']}", icon=":material/comment:")
 
 
 # ---------------------------------------------------------------------------
-# Nachfragen: Mensch prüft, korrigiert und entscheidet
+# Nachfragen: Mensch korrigiert und begründet – gesammelt wird, woraus die KI lernen kann
 # ---------------------------------------------------------------------------
 
-STATUS = {
-    "offen": "Offen",
-    "zurueckgestellt": "Zurückgestellt (Rückfrage läuft)",
-    "freigegeben": "Freigegeben",
-    "verworfen": "Verworfen",
-}
-ENTSCHEIDUNGEN = {
-    "freigegeben": "Freigeben – Daten stimmen (ggf. korrigiert), Beleg kann weiter",
-    "zurueckgestellt": "Zurückstellen – Rückfrage bei Mitarbeiter:in nötig (z. B. Rechnung fehlt)",
-    "verworfen": "Verwerfen – kein gültiger Beleg oder Duplikat",
-}
+STATUS = {"offen": "Offen", "erledigt": "Korrigiert"}
 _MIME = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
 
 
 def _letzte_entscheidungen(entscheidungen: list[dict]) -> dict[str, dict]:
-    """Datei-Hash -> jüngste Entscheidung (Einträge werden nie überschrieben, nur angehängt)."""
+    """Datei-Hash -> jüngste Korrektur (Einträge werden nie überschrieben, nur angehängt)."""
     letzte = {}
     for e in sorted(entscheidungen, key=lambda e: e.get("zeitpunkt") or ""):
         letzte[e.get("datei_sha256")] = e
     return letzte
+
+
+def _nachfrage_status(eintrag: dict | None) -> str:
+    # Ältere Einträge (Freigeben/Zurückstellen/Verwerfen aus der ersten Version) zählen ebenfalls als erledigt
+    return "offen" if (eintrag or {}).get("status", "offen") == "offen" else "erledigt"
 
 
 @st.cache_data(show_spinner="Lade Beleg …", max_entries=30)
@@ -721,44 +790,85 @@ def _vorschau(pfad: str) -> list[bytes]:
     return dateien_zu_bildern([(pfad, daten, _MIME.get(endung, "image/jpeg"))])[0]
 
 
+def _belegbilder(eintrag: dict) -> None:
+    pfade = eintrag.get("beleg_pfade") or ([eintrag["beleg_pfad"]] if eintrag.get("beleg_pfad") else [])
+    if not pfade:
+        st.caption("Zu diesem Eintrag ist kein Original gespeichert.")
+    for pfad in pfade:
+        try:
+            bilder = _vorschau(pfad)
+        except Exception as e:
+            st.warning(f"{pfad} konnte nicht geladen werden: {e}")
+            continue
+        for i, bild in enumerate(bilder, start=1):
+            st.image(bild, width="stretch", caption=f"{pfad}, Seite {i} von {len(bilder)}")
+
+
+def _gegenueberstellung(e: dict) -> None:
+    """Vorher (KI) links, nachher (vom Menschen korrigiert) rechts – geänderte Zeilen rot, unveränderte grün."""
+    felder = e.get("felder")
+    if not felder:  # Einträge aus der ersten Version speicherten noch keinen Vorher-Stand
+        st.caption("Für diesen älteren Eintrag ist keine Gegenüberstellung gespeichert.")
+    else:
+        vorher_kat, nachher_kat = e.get("kategorie_vorher"), e.get("kategorie")
+        zeilen = [{
+            "Feld": "Belegart",
+            "Vorher (KI)": _kategorie_label(vorher_kat),
+            "Nachher (korrigiert)": _kategorie_label(nachher_kat),
+            "Status": "ok" if vorher_kat == nachher_kat else "korrigiert",
+        }] + [{
+            "Feld": label,
+            "Vorher (KI)": anzeige(felder[key]["modell"]) or "–",
+            "Nachher (korrigiert)": anzeige(felder[key]["korrekt"]) or "–",
+            "Status": "ok" if felder[key]["richtig"] else "korrigiert",
+        } for key, label, _typ in FEEDBACK_FELDER if key in felder]
+        geaendert = sum(1 for z in zeilen if z["Status"] == "korrigiert")
+        st.markdown(f"**{geaendert} von {len(zeilen)} Angaben geändert**" if geaendert
+                    else "**Keine Angabe geändert** – die KI hatte alles richtig gelesen.")
+        _farbtabelle(zeilen, ["Status"], ganze_zeile=True)
+    if e.get("kommentar"):
+        st.info(f"**Begründung:** {e['kommentar']}", icon=":material/comment:")
+    st.caption(f"Korrigiert am {zeitpunkt_de(e.get('zeitpunkt'))} von {e.get('bearbeiter') or 'unbekannt'}")
+
+
 def zeige_nachfragen():
-    meldung = st.session_state.pop("nachfrage_meldung", None)
-    if meldung:
-        st.success(meldung, icon=":material/check_circle:")
+    st.caption(
+        "Hier landen Belege, bei denen die KI unsicher war. Bitte mit dem Original vergleichen, falsche Angaben "
+        "korrigieren und kurz begründen. Jede Korrektur wird gespeichert – daraus lernt die KI später."
+    )
     try:
         nachfragen = nachfragen_laden()
         letzte = _letzte_entscheidungen(entscheidungen_laden())
     except Exception as e:
         st.error(f"Nachfragen konnten nicht geladen werden: {e}")
         return
+
+    zuletzt = st.session_state.pop("nachfrage_zuletzt", None)
+    if zuletzt:  # Ergebnis der gerade gespeicherten Korrektur, darunter geht es mit der nächsten weiter
+        with st.container(border=True):
+            st.success(f"„{zuletzt.get('dateiname')}“ gespeichert. So sieht die Korrektur aus:",
+                       icon=":material/check_circle:")
+            _gegenueberstellung(zuletzt)
+
     if not nachfragen:
         st.success("Keine Nachfragen. Unklare Belege landen hier automatisch nach der Analyse.")
         return
 
     def status(n):
-        return letzte.get(n.get("datei_sha256"), {}).get("status", "offen")
+        return _nachfrage_status(letzte.get(n.get("datei_sha256")))
 
     anzahl = {s: sum(1 for n in nachfragen if status(n) == s) for s in STATUS}
-    for spalte, (s, label) in zip(st.columns(4), STATUS.items()):
-        spalte.metric(label.split(" (")[0], anzahl[s])
+    for spalte, (s, label) in zip(st.columns(4)[:2], STATUS.items()):
+        spalte.metric(label, anzahl[s])
 
-    ansichten = {
-        "offen": f"Offen ({anzahl['offen']})",
-        "zurueckgestellt": f"Zurückgestellt ({anzahl['zurueckgestellt']})",
-        "erledigt": "Erledigt",
-        "alle": "Alle",
-    }
+    ansichten = {"offen": f"Offen ({anzahl['offen']})", "erledigt": f"Korrigiert ({anzahl['erledigt']})",
+                 "alle": "Alle"}
     ansicht = st.radio("Anzeigen", list(ansichten), format_func=ansichten.get, horizontal=True,
                        key="nachfragen_ansicht")
-    passend = {
-        "offen": lambda n: status(n) == "offen",
-        "zurueckgestellt": lambda n: status(n) == "zurueckgestellt",
-        "erledigt": lambda n: status(n) in ("freigegeben", "verworfen"),
-        "alle": lambda n: True,
-    }[ansicht]
-    liste = [n for n in reversed(nachfragen) if passend(n)]  # neueste zuerst
+    liste = [n for n in reversed(nachfragen) if ansicht == "alle" or status(n) == ansicht]  # neueste zuerst
     if not liste:
-        st.info("In dieser Ansicht gibt es nichts zu tun.")
+        st.info("Alles erledigt – keine offenen Nachfragen." if ansicht == "offen"
+                else "In dieser Ansicht gibt es keine Belege.")
         return
 
     gewaehlt = st.selectbox(
@@ -780,9 +890,10 @@ def zeige_nachfragen():
                 "Status": STATUS[status(n)],
                 "Datei": n.get("dateiname"),
                 "Kategorie (KI)": _kategorie_label(n.get("kategorie")),
-                "Gründe": " | ".join(n.get("gruende", [])),
+                "Gründe der KI": " | ".join(n.get("gruende", [])),
+                "Begründung": letzte.get(n.get("datei_sha256"), {}).get("kommentar") or "",
                 "Hochgeladen von": n.get("benutzer_email") or "",
-                "Entschieden von": letzte.get(n.get("datei_sha256"), {}).get("bearbeiter") or "",
+                "Korrigiert von": letzte.get(n.get("datei_sha256"), {}).get("bearbeiter") or "",
             } for n in reversed(nachfragen)],
             hide_index=True,
             width="stretch",
@@ -792,70 +903,59 @@ def zeige_nachfragen():
 def _nachfrage_bearbeiten(n: dict, letzte: dict | None):
     sha = n.get("datei_sha256") or "ohne_hash"
     analyse = BelegAnalyse.model_validate(n.get("analyse") or {})
+    erledigt = _nachfrage_status(letzte) == "erledigt"
 
     st.error(
-        "**Warum nachgefragt wird**\n\n" + "\n".join(f"- {g}" for g in n.get("gruende", [])),
+        "**Warum die KI nachfragt**\n\n" + "\n".join(f"- {g}" for g in n.get("gruende", [])),
         icon=":material/help:",
     )
-    if letzte:
-        st.info(
-            f"**Letzte Entscheidung:** {STATUS.get(letzte.get('status'), letzte.get('status'))} – "
-            f"{zeitpunkt_de(letzte.get('zeitpunkt'))}, {letzte.get('bearbeiter') or 'unbekannt'}"
-            + (f"\n\n{letzte['kommentar']}" if letzte.get("kommentar") else ""),
-            icon=":material/history:",
-        )
 
     col_bild, col_form = st.columns([2, 3], gap="large")
     with col_bild:
         st.subheader("Beleg")
-        pfade = n.get("beleg_pfade") or ([n["beleg_pfad"]] if n.get("beleg_pfad") else [])
-        for pfad in pfade:
-            try:
-                bilder = _vorschau(pfad)
-            except Exception as e:
-                st.warning(f"{pfad} konnte nicht geladen werden: {e}")
-                continue
-            for i, bild in enumerate(bilder, start=1):
-                st.image(bild, width="stretch", caption=f"{pfad}, Seite {i} von {len(bilder)}")
+        _belegbilder(n)
 
     with col_form:
-        st.subheader("Prüfen und entscheiden")
-        st.caption(
-            "Die Felder zeigen, was die KI gelesen hat. Bitte mit dem Beleg vergleichen und nur Falsches "
-            "korrigieren. Beträge wie 1.234,50 – Datum als TT.MM.JJJJ."
-        )
-        if n.get("kalender"):
-            _zeige_kalender(n["kalender"])
-        if analyse.korrekturen:
-            st.info("**Vom Code umgedeutet**\n\n" + "\n".join(f"- {k}" for k in analyse.korrekturen),
-                    icon=":material/calculate:")
-        kategorie_namen = kat_auswahl(KAT_STAND)  # auch Entwürfe: neu angelegte Kategorien sofort wählbar
-        kategorie_keys = list(kategorie_namen)
-        with st.form(key=f"nachfrage_form_{sha}"):
-            kat = st.selectbox(
-                "Belegart",
-                kategorie_keys,
-                index=kategorie_keys.index(analyse.kategorie) if analyse.kategorie in kategorie_keys else 0,
-                format_func=kategorie_namen.get,
+        if erledigt:
+            st.subheader("Vorher und nachher")
+            _gegenueberstellung(letzte)
+            bereich = st.expander("Noch einmal korrigieren")
+        else:
+            st.subheader("Prüfen und korrigieren")
+            bereich = st.container()
+        with bereich:
+            st.caption(
+                "Die Felder zeigen, was die KI gelesen hat. Bitte mit dem Beleg vergleichen und nur Falsches "
+                "korrigieren. Beträge wie 1.234,50 – Datum als TT.MM.JJJJ."
             )
-            korrekturen = _felder_eingabe(analyse, f"nf_{sha}")
-            entscheidung = st.radio(
-                "Entscheidung", list(ENTSCHEIDUNGEN), format_func=ENTSCHEIDUNGEN.get, index=None,
-            )
-            kommentar = st.text_area(
-                "Begründung / Notiz",
-                help="Pflicht beim Zurückstellen und Verwerfen – z. B. wen du was gefragt hast.",
-                placeholder="z. B. Steuersatz 0 % ist korrekt: Gutschein-Einlösung",
-            )
-            abgeschickt = st.form_submit_button("Entscheidung speichern", type="primary")
+            if n.get("kalender"):
+                _zeige_kalender(n["kalender"])
+            if analyse.korrekturen:
+                st.info("**Vom Code umgedeutet**\n\n" + "\n".join(f"- {k}" for k in analyse.korrekturen),
+                        icon=":material/calculate:")
+            kategorie_namen = kat_auswahl(KAT_STAND)  # auch Entwürfe: neu angelegte Kategorien sofort wählbar
+            kategorie_keys = list(kategorie_namen)
+            with st.form(key=f"nachfrage_form_{sha}"):
+                kat = st.selectbox(
+                    "Belegart",
+                    kategorie_keys,
+                    index=kategorie_keys.index(analyse.kategorie) if analyse.kategorie in kategorie_keys else 0,
+                    format_func=kategorie_namen.get,
+                )
+                korrekturen = _felder_eingabe(analyse, f"nf_{sha}")
+                kommentar = st.text_area(
+                    "Begründung (Pflicht)",
+                    help="Warum lag die KI falsch – oder warum war ihre Nachfrage unnötig? "
+                         "Aus diesen Begründungen werden später die Anweisungen an die KI verbessert.",
+                    placeholder="z. B. Trinkgeld steht handschriftlich unten, gehört zum Gesamtbetrag / "
+                                "Steuersatz 0 % ist korrekt: Gutschein-Einlösung",
+                )
+                abgeschickt = st.form_submit_button("Korrigieren", type="primary")
 
     if not abgeschickt:
         return
-    if entscheidung is None:
-        st.error("Bitte eine Entscheidung auswählen.")
-        return
-    if entscheidung != "freigegeben" and not kommentar.strip():
-        st.error("Bitte kurz begründen, warum zurückgestellt bzw. verworfen wird.")
+    if not kommentar.strip():
+        st.error("Bitte kurz begründen – auch wenn nichts geändert werden musste.")
         return
     felder, ungueltig = _felder_auswerten(analyse, korrekturen)
     if ungueltig:
@@ -863,44 +963,45 @@ def _nachfrage_bearbeiten(n: dict, letzte: dict | None):
         return
 
     bearbeiter = aktueller_benutzer()
+    eintrag = {
+        "datei_sha256": sha,
+        "dateiname": n.get("dateiname"),
+        "status": "korrigiert",
+        "kategorie_vorher": analyse.kategorie,
+        "kategorie": kat,
+        "felder": felder,  # je Feld: vorher (modell), nachher (korrekt), richtig
+        "daten": {k: f["korrekt"] for k, f in felder.items()},  # geprüfte Werte für den nächsten Schritt
+        "korrigierte_felder": [k for k, f in felder.items() if not f["richtig"]],
+        "kommentar": kommentar.strip(),
+        "bearbeiter": bearbeiter,
+        "gruende": n.get("gruende", []),
+        "modell": n.get("modell"),
+        "prompt_version": n.get("prompt_version"),
+    }
     try:
-        entscheidung_speichern({
+        entscheidung_speichern(eintrag)
+        # Korrektur durch einen Menschen -> zählt auch in der Auswertung (Trefferquote der KI)
+        feedback_speichern({
+            "quelle": "nachfrage",
             "datei_sha256": sha,
             "dateiname": n.get("dateiname"),
-            "status": entscheidung,
-            "kategorie": kat,
-            "daten": {k: f["korrekt"] for k, f in felder.items()},  # geprüfte Werte für den nächsten Schritt
-            "korrigierte_felder": [k for k, f in felder.items() if not f["richtig"]],
-            "kommentar": kommentar.strip() or None,
+            "beleg_pfad": n.get("beleg_pfad"),
+            "beleg_pfade": n.get("beleg_pfade"),
+            "modell": n.get("modell"),
+            "prompt_version": n.get("prompt_version"),
+            "analyse": n.get("analyse"),
+            "kategorie": {"modell": analyse.kategorie, "korrekt": kat, "richtig": analyse.kategorie == kat},
+            "felder": felder,
+            "nachfrage_gruende": n.get("gruende", []),
+            "kommentar": kommentar.strip(),
             "bearbeiter": bearbeiter,
-            "gruende": n.get("gruende", []),
+            "benutzer_email": bearbeiter,
         })
-        if entscheidung == "freigegeben":
-            # Freigabe = von einem Menschen geprüft -> zählt auch in der Auswertung (Trefferquote der KI)
-            feedback_speichern({
-                "quelle": "nachfrage",
-                "datei_sha256": sha,
-                "dateiname": n.get("dateiname"),
-                "beleg_pfad": n.get("beleg_pfad"),
-                "beleg_pfade": n.get("beleg_pfade"),
-                "modell": n.get("modell"),
-                "prompt_version": n.get("prompt_version"),
-                "analyse": n.get("analyse"),
-                "kategorie": {"modell": analyse.kategorie, "korrekt": kat, "richtig": analyse.kategorie == kat},
-                "felder": felder,
-                "kommentar": kommentar.strip() or None,
-                "bearbeiter": bearbeiter,
-                "benutzer_email": bearbeiter,
-            })
     except Exception as e:
         st.error(f"Speichern fehlgeschlagen – bitte erneut versuchen: {e}")
         return
 
-    korrigiert = sum(1 for f in felder.values() if not f["richtig"]) + (analyse.kategorie != kat)
-    st.session_state["nachfrage_meldung"] = (
-        f"„{n.get('dateiname')}“: {STATUS[entscheidung]}"
-        + (f" – {korrigiert} Angabe(n) korrigiert." if korrigiert else ".")
-    )
+    st.session_state["nachfrage_zuletzt"] = {**eintrag, "zeitpunkt": datetime.now().isoformat(timespec="seconds")}
     st.rerun()
 
 

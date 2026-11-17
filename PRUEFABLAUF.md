@@ -187,24 +187,28 @@ Kalender für dieses Konto freigegeben ist) oder über einen eigenen Zugang mit 
 
 Datei: `App.py` (`zeige_nachfragen`, `_nachfrage_bearbeiten`), Ablage `storage.py` (`entscheidung_speichern`)
 
-1. Liste filtern: **Offen**, **Zurückgestellt**, **Erledigt** oder **Alle**. Die neuesten stehen oben.
-2. Nachfrage auswählen. Links steht das Original (alle Seiten), rechts die Gründe und die von der KI
-   gelesenen Werte als Formular.
+Im Moment geht es ums **Sammeln von Lernmaterial**: Jede Nachfrage wird korrigiert, begründet und
+gespeichert. Eine Auswahl wie Freigeben/Zurückstellen/Verwerfen gibt es (noch) nicht.
+
+1. Liste filtern: **Offen**, **Korrigiert** oder **Alle**. Die neuesten stehen oben.
+2. Nachfrage auswählen. Oben stehen die Gründe der KI, links das Original (alle Seiten), rechts die von der
+   KI gelesenen Werte als Formular.
 3. Werte mit dem Beleg vergleichen und nur Falsches korrigieren. Die **Belegart** wählt man aus der Liste der
    Standard- und selbst angelegten Kategorien; noch nicht aktivierte Kategorien stehen als „(Entwurf)“ dabei,
    gelöschte nicht. (Entwürfe fließen weiterhin nicht in den KI-Prompt ein, siehe Abschnitt 9.)
-4. Entscheiden:
-   - **Freigeben**: Die (korrigierten) Daten gelten, der Beleg kann weiter.
-   - **Zurückstellen**: Rückfrage bei Mitarbeiter:in nötig, z. B. weil die Rechnung fehlt. Begründung ist Pflicht.
-   - **Verwerfen**: kein gültiger Beleg oder Duplikat. Begründung ist Pflicht.
+4. **Begründung (Pflicht)**: Warum lag die KI falsch – oder warum war ihre Nachfrage unnötig?
+5. **„Korrigieren“** speichert. Danach erscheint oben die **Gegenüberstellung**: Feld, *Vorher (KI)*,
+   *Nachher (korrigiert)*; geänderte Zeilen rot, unveränderte grün. Unter „Korrigiert“ bleibt sie für jeden
+   erledigten Beleg sichtbar, „Noch einmal korrigieren“ legt eine neue Korrektur an.
 
-Jede Entscheidung ist ein **eigener Eintrag** (`entscheidungen/`) mit Person, Zeitpunkt, Begründung und
-den geprüften Werten. Nichts wird überschrieben. So bleibt nachvollziehbar, wer wann was entschieden hat
-(Stufe 1 des Leitfadens: Annika prüft und dokumentiert jede Korrektur). Eine Entscheidung lässt sich
-später durch eine neue ersetzen.
+Jede Korrektur ist ein **eigener Eintrag** (`entscheidungen/`) mit Person, Zeitpunkt, Begründung, den
+Gründen der KI und je Feld vorher/nachher. Nichts wird überschrieben (Stufe 1 des Leitfadens: Annika prüft
+und dokumentiert jede Korrektur). Einträge aus der ersten Version (Freigeben/Zurückstellen/Verwerfen)
+zählen als erledigt.
 
-Eine **Freigabe zählt zusätzlich als Feedback**. Die korrigierten Werte gehen in die Trefferquote der
-Auswertung ein. Gerade die schwierigen Belege werden so zum Testmaterial.
+Jede Korrektur **zählt zusätzlich als Feedback** (mit den Gründen der KI und der Begründung). Sie geht in
+die Trefferquote der Auswertung ein. Gerade die schwierigen Belege werden so zum Testmaterial und später zur
+Grundlage, die Anweisungen an die KI zu verbessern.
 
 ## 9. Kategorien (Tab „Kategorien“) und wie die KI daraus lernt
 
@@ -233,7 +237,7 @@ Kategorien mit allen Regeln stehen bei jeder Analyse in den Anweisungen an die K
 bekommt einen Fingerabdruck des Kategorie-Wissens (z. B. `2026-11-17.5+kda009b`). So zeigt die
 Auswertung, ob eine geänderte Beschreibung die Trefferquote verbessert oder verschlechtert. Ein echtes
 Nachtrainieren des Modells lohnt sich erst mit einigen hundert geprüften Belegen. Diese sammeln
-Feedback und Freigaben gerade.
+Feedback und Korrekturen gerade.
 
 ### Probelauf vor dem Speichern („Hilft meine Änderung?“)
 
@@ -260,8 +264,24 @@ Gespeichert wird beim Testlauf **nichts**. Höchstens 15 Belege pro Lauf, 4 para
 Datei: `App.py`
 
 Nach jeder Analyse kann ein Mensch jedes Feld bestätigen oder korrigieren. Gespeichert werden das
-Ergebnis, alle Lesungen (welches Modell was gelesen hat), die Umdeutungen und die Korrekturen. Der Tab
-„Auswertung“ zeigt die Trefferquote pro Feld, getrennt nach Prompt-Version und Modell.
+Ergebnis, alle Lesungen (welches Modell was gelesen hat), die Umdeutungen und die Korrekturen.
+
+Der Tab **„Auswertung“** (`zeige_auswertung`) zählt jeden bewerteten Beleg **einmal** (jüngste Bewertung
+pro Datei-Hash), aus Feedback und korrigierten Nachfragen:
+
+| Kennzahl | Bedeutung |
+|---|---|
+| Belegart richtig | KI-Kategorie = vom Menschen bestätigte Kategorie |
+| Alle Felder richtig | kein Feld musste korrigiert werden (ein Feld gilt als richtig, wenn es beim Bewerten nicht geändert wurde) |
+| Komplett richtig | beides |
+
+Dazu Trefferquote pro Feld und pro Belegart, die Verwechslungen und ein Hinweis, wenn eine falsche
+Belegart eine **neu angelegte Kategorie** betrifft (die KI kannte sie bei der Analyse evtl. noch nicht).
+Filter nach Prompt-Version und Modell sind aufklappbar.
+
+**Bewertete Belege durchsehen:** Filter „Alle / Fehlerfrei / Mit Korrekturen“, Beleg auswählen. Links das
+Original, rechts jedes Feld mit „KI hat gelesen“ und „Richtig ist“ – grün = stimmte, rot = korrigiert –
+plus Bewerter, Quelle (Feedback oder Nachfrage-Freigabe), Modell, Prompt-Version und Kommentar.
 
 ## Was nicht abgesichert ist
 
