@@ -1,0 +1,228 @@
+"""Abgleich von Belegen mit dem Google-Kalender der Firma.
+
+Zu Bewirtungen und Übernachtungen muss es einen passenden Kalendertermin geben. Findet die App keinen,
+geht der Beleg zur Nachfrage. Ist ein Termin gefunden, liefert er Teilnehmer und Anlass als Vorschlag
+für den Bewirtungsbeleg.
+
+Konfiguration in den Secrets:
+    [kalender]
+    kalender_id = "firma@group.calendar.google.com"   # oder die E-Mail-Adresse des Kalenders
+
+Der Zugriff läuft über denselben Google-Token wie Drive (drive_token_holen.py fragt beide Rechte an).
+
+Regeln (bewusst einfach und nachvollziehbar, Werte unten anpassbar):
+- Bewirtung: Termin am Belegdatum. Passend, wenn er zeitlich zur Uhrzeit auf dem Beleg passt
+  (Termin beginnt höchstens BEWIRTUNG_VORHER_H Stunden vor der Zahlung und endet frühestens
+  BEWIRTUNG_NACHHER_H Stunden davor) ODER Restaurantname/Stadt in Titel, Ort oder Beschreibung vorkommt.
+- Übernachtung: Termin im Zeitraum ÜBERNACHTUNG_TAGE vor bis 1 Tag nach dem Belegdatum, der mehrtägig ist
+  oder dessen Titel/Ort Hotel bzw. Stadt nennt.
+"""
+
+import re
+import unicodedata
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+from beleg_schema import BEWIRTUNG_KATEGORIEN, BelegAnalyse, datum_de
+
+ZEITZONE = ZoneInfo("Europe/Berlin")
+BEWIRTUNG_VORHER_H = 5     # Termin darf so viele Stunden vor der Zahlung beginnen
+BEWIRTUNG_NACHHER_H = 1    # ... und muss spätestens so viele Stunden vor der Zahlung geendet haben (sonst zu früh)
+UEBERNACHTUNG_TAGE = 14    # Hotelrechnung kommt am Abreisetag; Reise kann bis zu so viele Tage vorher beginnen
+
+KALENDER_KATEGORIEN = set(BEWIRTUNG_KATEGORIEN) | {"uebernachtung"}
+_FUELLWOERTER = {"gmbh", "co", "kg", "ag", "ug", "mbh", "restaurant", "hotel", "gasthaus", "gaststaette",
+                 "cafe", "bar", "und", "der", "die", "das", "im", "am", "zum", "zur", "the", "inh", "inhaber"}
+
+
+@dataclass
+class Termin:
+    titel: str
+    start: datetime
+    ende: datetime
+    ganztags: bool = False
+    ort: str = ""
+    beschreibung: str = ""
+    teilnehmer: list[str] = field(default_factory=list)
+    link: str = ""
+
+    def zeitraum_de(self) -> str:
+        if self.ganztags:
+            letzter = (self.ende - timedelta(days=1)).date()
+            return (datum_de(self.start.date().isoformat()) if letzter <= self.start.date()
+                    else f"{datum_de(self.start.date().isoformat())} – {datum_de(letzter.isoformat())}")
+        if self.start.date() == self.ende.date():
+            return f"{self.start:%d.%m.%Y %H:%M}–{self.ende:%H:%M}"
+        return f"{self.start:%d.%m.%Y %H:%M} – {self.ende:%d.%m.%Y %H:%M}"
+
+
+@dataclass
+class Abgleich:
+    status: str                      # "passend" | "kein_termin" | "nicht_noetig" | "nicht_eingerichtet" | "fehler"
+    grund: str = ""
+    termin: Termin | None = None
+    kandidaten: list[Termin] = field(default_factory=list)  # andere Termine im Zeitraum (Hilfe bei Nachfrage)
+
+    @property
+    def nachfrage_grund(self) -> str | None:
+        if self.status in ("kein_termin", "fehler"):
+            return f"Kalender: {self.grund}"
+        return None
+
+    def als_dict(self) -> dict:
+        def t(x: Termin | None):
+            return None if x is None else {"titel": x.titel, "zeitraum": x.zeitraum_de(), "ort": x.ort,
+                                           "teilnehmer": x.teilnehmer, "link": x.link}
+        return {"status": self.status, "grund": self.grund, "termin": t(self.termin),
+                "kandidaten": [t(k) for k in self.kandidaten]}
+
+
+# ---------------------------------------------------------------------------
+# Hilfsfunktionen für den Vergleich
+# ---------------------------------------------------------------------------
+
+def _norm(text: str) -> str:
+    text = unicodedata.normalize("NFKD", (text or "").casefold())
+    text = text.replace("ß", "ss")
+    return "".join(c for c in text if not unicodedata.combining(c))
+
+
+def _woerter(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", _norm(text)) if len(w) >= 4 and w not in _FUELLWOERTER}
+
+
+def stadt_aus_adresse(adresse: str | None) -> str | None:
+    """'Große Himmelsgasse 6, 67346 Speyer' -> 'Speyer'"""
+    treffer = re.search(r"\b\d{5}\s+([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß .\-]+)", adresse or "")
+    return treffer.group(1).strip(" ,.") if treffer else None
+
+
+def _erwaehnt(termin: Termin, analyse: BelegAnalyse) -> str | None:
+    """Nennt der Termin den Aussteller (z. B. Restaurant/Hotel) oder die Stadt? -> was gefunden wurde."""
+    text = _woerter(f"{termin.titel} {termin.ort} {termin.beschreibung}")
+    gemeinsam = _woerter(analyse.restaurant_name or "") & text
+    if gemeinsam:
+        return f"Name „{sorted(gemeinsam)[0]}“"
+    stadt = stadt_aus_adresse(analyse.adresse)
+    if stadt and _woerter(stadt) & text:
+        return f"Ort „{stadt}“"
+    return None
+
+
+def _zahlzeit(analyse: BelegAnalyse) -> datetime | None:
+    if not analyse.datum:
+        return None
+    d = date.fromisoformat(analyse.datum)
+    stunde, minute = 23, 59  # ohne Uhrzeit: ganzer Tag zählt
+    if analyse.uhrzeit and re.match(r"^\d{1,2}:\d{2}", analyse.uhrzeit):
+        stunde, minute = (int(x) for x in analyse.uhrzeit[:5].split(":"))
+    return datetime(d.year, d.month, d.day, stunde, minute, tzinfo=ZEITZONE)
+
+
+def zeitraum(analyse: BelegAnalyse) -> tuple[datetime, datetime] | None:
+    """Zeitraum, in dem nach Terminen gesucht wird."""
+    if not analyse.datum:
+        return None
+    d = date.fromisoformat(analyse.datum)
+    beginn = datetime(d.year, d.month, d.day, tzinfo=ZEITZONE)
+    if analyse.kategorie == "uebernachtung":
+        return beginn - timedelta(days=UEBERNACHTUNG_TAGE), beginn + timedelta(days=2)
+    return beginn, beginn + timedelta(days=1)
+
+
+# ---------------------------------------------------------------------------
+# Abgleich (reine Logik, ohne API – gut testbar)
+# ---------------------------------------------------------------------------
+
+def abgleichen(analyse: BelegAnalyse, termine: list[Termin]) -> Abgleich:
+    if analyse.kategorie not in KALENDER_KATEGORIEN:
+        return Abgleich("nicht_noetig")
+    if not analyse.datum:
+        return Abgleich("kein_termin", "ohne Belegdatum kein Abgleich möglich.")
+    if analyse.kategorie == "uebernachtung":
+        return _abgleich_uebernachtung(analyse, termine)
+    return _abgleich_bewirtung(analyse, termine)
+
+
+def _abgleich_bewirtung(analyse: BelegAnalyse, termine: list[Termin]) -> Abgleich:
+    tag = date.fromisoformat(analyse.datum)
+    am_tag = [t for t in termine if t.start.date() <= tag <= (t.ende - timedelta(seconds=1)).date()]
+    zahlung = _zahlzeit(analyse)
+    hat_uhrzeit = bool(analyse.uhrzeit)
+    bester, begruendung = None, ""
+    for t in am_tag:
+        erwaehnt = _erwaehnt(t, analyse)
+        zeitlich = (not t.ganztags and hat_uhrzeit
+                    and zahlung - timedelta(hours=BEWIRTUNG_VORHER_H) <= t.start <= zahlung
+                    and t.ende >= zahlung - timedelta(hours=BEWIRTUNG_NACHHER_H))
+        if erwaehnt and zeitlich:
+            return Abgleich("passend", f"Termin passt zeitlich und nennt {erwaehnt}.", t,
+                            [k for k in am_tag if k is not t])
+        if (erwaehnt or zeitlich) and bester is None:
+            bester = t
+            begruendung = (f"Termin nennt {erwaehnt}." if erwaehnt
+                           else f"Termin passt zeitlich zur Zahlung um {analyse.uhrzeit} Uhr.")
+    if bester:
+        return Abgleich("passend", begruendung, bester, [k for k in am_tag if k is not bester])
+    if am_tag:
+        return Abgleich("kein_termin",
+                        f"am {datum_de(analyse.datum)} gibt es {len(am_tag)} Termin(e), aber keiner passt "
+                        "zu Uhrzeit, Restaurant oder Ort.", None, am_tag)
+    return Abgleich("kein_termin", f"kein Termin am {datum_de(analyse.datum)} gefunden.")
+
+
+def _abgleich_uebernachtung(analyse: BelegAnalyse, termine: list[Termin]) -> Abgleich:
+    tag = date.fromisoformat(analyse.datum)
+    # Termin muss bis zum Belegtag (Abreise) reichen bzw. höchstens 1 Tag davor enden
+    im_zeitraum = [t for t in termine
+                   if t.start.date() <= tag + timedelta(days=1)
+                   and (t.ende - timedelta(seconds=1)).date() >= tag - timedelta(days=1)]
+    for t in im_zeitraum:
+        erwaehnt = _erwaehnt(t, analyse)
+        if erwaehnt:
+            return Abgleich("passend", f"Termin um den {datum_de(analyse.datum)} nennt {erwaehnt}.", t,
+                            [k for k in im_zeitraum if k is not t])
+    mehrtaegig = [t for t in im_zeitraum if (t.ende - t.start) >= timedelta(hours=20)]
+    if len(mehrtaegig) == 1:
+        t = mehrtaegig[0]
+        return Abgleich("passend", "Mehrtägiger Termin (Reise) über das Rechnungsdatum.", t,
+                        [k for k in im_zeitraum if k is not t])
+    if mehrtaegig:
+        return Abgleich("kein_termin", f"{len(mehrtaegig)} mehrtägige Termine kommen in Frage, keiner nennt "
+                        "Hotel oder Ort – bitte zuordnen.", None, mehrtaegig)
+    return Abgleich("kein_termin", f"keine Reise bzw. kein Termin rund um den {datum_de(analyse.datum)} "
+                    "mit passendem Hotel oder Ort gefunden.", None, im_zeitraum)
+
+
+# ---------------------------------------------------------------------------
+# Google-Kalender lesen
+# ---------------------------------------------------------------------------
+
+def termin_aus_api(e: dict) -> Termin:
+    def zeit(feld):
+        x = e.get(feld, {})
+        if "dateTime" in x:
+            return datetime.fromisoformat(x["dateTime"].replace("Z", "+00:00")).astimezone(ZEITZONE), False
+        d = date.fromisoformat(x["date"])
+        return datetime(d.year, d.month, d.day, tzinfo=ZEITZONE), True
+    start, ganztags = zeit("start")
+    ende, _ = zeit("end")
+    teilnehmer = [a.get("displayName") or a.get("email", "") for a in e.get("attendees", [])
+                  if not a.get("resource") and a.get("responseStatus") != "declined"]
+    return Termin(titel=e.get("summary") or "(ohne Titel)", start=start, ende=ende, ganztags=ganztags,
+                  ort=e.get("location") or "", beschreibung=e.get("description") or "",
+                  teilnehmer=teilnehmer, link=e.get("htmlLink") or "")
+
+
+def termine_laden(service, kalender_id: str, von: datetime, bis: datetime) -> list[Termin]:
+    termine, token = [], None
+    while True:
+        res = service.events().list(
+            calendarId=kalender_id, timeMin=von.isoformat(), timeMax=bis.isoformat(), singleEvents=True,
+            orderBy="startTime", maxResults=250, pageToken=token,
+        ).execute()
+        termine += [termin_aus_api(e) for e in res.get("items", []) if e.get("status") != "cancelled"]
+        token = res.get("nextPageToken")
+        if not token:
+            return termine

@@ -18,7 +18,9 @@ from pathlib import Path
 
 import streamlit as st
 
-DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+# Rechte, die drive_token_holen.py beim Token anfragt (Drive schreiben, Kalender nur lesen)
+GOOGLE_SCOPES = ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/calendar.readonly"]
+DRIVE_SCOPES = GOOGLE_SCOPES  # alter Name, bleibt für Kompatibilität
 _ORDNER_MIME = "application/vnd.google-apps.folder"
 _MIME_NACH_ENDUNG = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
 # Funktioniert für "Meine Ablage" und für geteilte Ablagen (Shared Drives)
@@ -72,6 +74,15 @@ def ablage_beschreibung() -> str:
         return "falsch konfiguriert"
 
 
+def ablage_link() -> str | None:
+    """Link zum Drive-Ordner (öffnet nur für Personen, die Zugriff auf den Ordner haben)."""
+    try:
+        cfg = _drive_config()
+    except AblageFehler:
+        return None
+    return f"https://drive.google.com/drive/folders/{cfg['ordner_id']}" if cfg else None
+
+
 def ablage_pruefen() -> None:
     """Beim Start aufrufen: wirft AblageFehler, wenn Drive konfiguriert, aber nicht erreichbar ist."""
     if _drive_config():
@@ -93,7 +104,7 @@ def _drive_credentials(refresh_token: str, client_id: str, client_secret: str):
         client_id=client_id,
         client_secret=client_secret,
         token_uri="https://oauth2.googleapis.com/token",
-        scopes=DRIVE_SCOPES,
+        scopes=None,  # beim Erneuern keine Rechte fordern -> alte Tokens (nur Drive) laufen weiter
     )
 
 
@@ -451,3 +462,60 @@ def _drive_beleg_laden(name: str) -> bytes:
     if not treffer:
         raise FileNotFoundError(f"Beleg {name} nicht im Ordner „belege“ gefunden.")
     return _drive().files().get_media(fileId=treffer[0]["id"], **_ALLE_ABLAGEN).execute()
+
+
+# ---------------------------------------------------------------------------
+# Google-Kalender (nur lesen) – Abgleich Beleg <-> Termin, siehe kalender.py
+# ---------------------------------------------------------------------------
+
+def kalender_id() -> str | None:
+    return (_secrets_abschnitt("kalender").get("kalender_id") or "").strip() or None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _kalender_termine(kid: str, von_iso: str, bis_iso: str):
+    from datetime import datetime
+
+    from googleapiclient.discovery import build
+
+    from kalender import termine_laden
+
+    cfg = _drive_config()
+    # Eigener Kalender-Zugang (z. B. von Annika, nur Kalender lesen) hat Vorrang vor dem Drive-Zugang
+    token = _secrets_abschnitt("kalender").get("refresh_token") or cfg["refresh_token"]
+    creds = _drive_credentials(token, cfg["client_id"], cfg["client_secret"])
+    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    return termine_laden(service, kid, datetime.fromisoformat(von_iso), datetime.fromisoformat(bis_iso))
+
+
+def kalender_abgleichen(analyse):
+    """Beleg mit dem Firmenkalender abgleichen -> kalender.Abgleich."""
+    from googleapiclient.errors import HttpError
+
+    from kalender import KALENDER_KATEGORIEN, Abgleich, abgleichen, zeitraum
+
+    if analyse.kategorie not in KALENDER_KATEGORIEN:
+        return Abgleich("nicht_noetig")
+    kid = kalender_id()
+    try:
+        drive = _drive_config()
+    except AblageFehler:
+        drive = None
+    if not kid or not drive:
+        return Abgleich("nicht_eingerichtet", "Kalenderabgleich ist noch nicht eingerichtet.")
+    bereich = zeitraum(analyse)
+    if bereich is None:
+        return abgleichen(analyse, [])
+    try:
+        termine = _kalender_termine(kid, bereich[0].isoformat(), bereich[1].isoformat())
+    except HttpError as e:
+        if e.resp.status in (401, 403):
+            return Abgleich("fehler", "kein Zugriff auf den Kalender. Zugang einrichten mit "
+                                      "„python drive_token_holen.py --kalender“ (Konto, das den Kalender sehen "
+                                      "darf) oder Kalender für das Drive-Konto freigeben.")
+        if e.resp.status == 404:
+            return Abgleich("fehler", "Kalender nicht gefunden – kalender_id in den Secrets prüfen.")
+        return Abgleich("fehler", f"Kalender nicht erreichbar ({e.resp.status}).")
+    except Exception as e:
+        return Abgleich("fehler", f"Kalender nicht erreichbar: {e}")
+    return abgleichen(analyse, termine)

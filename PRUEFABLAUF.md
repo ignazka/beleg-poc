@@ -161,6 +161,27 @@ Feedback. Gründe:
 - eine Rechenprüfung fehlgeschlagen (nach den Umdeutungen aus Abschnitt 3)
 - die beiden Lesungen weichen ab und auch der Schiedsrichter klärt es nicht
 - mehr als 20 Seiten
+- **kein passender Kalendertermin** zu einer Bewirtung oder Übernachtung (siehe Abschnitt 7a), oder der
+  Kalender ist nicht erreichbar
+
+## 7a. Abgleich mit dem Firmenkalender
+
+Datei: `kalender.py` (Regeln), `storage.py` (`kalender_abgleichen`)
+
+Zu jeder **Bewirtung** und **Übernachtung** muss es einen passenden Termin im Google-Kalender der Firma geben.
+
+| Belegart | passend, wenn … |
+|---|---|
+| Bewirtung | ein Termin am Belegdatum zeitlich zur Zahlung passt (beginnt höchstens 5 Std. vorher, endet frühestens 1 Std. vorher) **oder** Restaurantname bzw. Stadt in Titel, Ort oder Beschreibung steht |
+| Übernachtung | ein Termin rund um das Rechnungsdatum (bis 1 Tag davor) Hotel oder Stadt nennt, **oder** genau eine mehrtägige Reise über das Datum läuft |
+
+- Gefunden: Die App zeigt den Termin und schlägt dessen **Teilnehmer** als „bewirtete Personen“ vor.
+- Nicht gefunden: **Nachfrage**, mit den Terminen im Zeitraum als Hilfe („vielleicht ist einer davon gemeint“).
+- Noch nicht eingerichtet: nur ein Hinweis, keine Nachfrage.
+
+Einrichtung: `kalender_id` unter `[kalender]` in den Secrets. Zugriff entweder über den Drive-Zugang (wenn der
+Kalender für dieses Konto freigegeben ist) oder über einen eigenen Zugang mit Kalender-Leserecht:
+`python drive_token_holen.py --kalender`, angemeldet mit einem Konto, das den Kalender sehen darf (z. B. Annika).
 
 ## 8. Nachfragen bearbeiten (Tab „Nachfragen“)
 

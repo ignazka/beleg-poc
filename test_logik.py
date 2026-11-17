@@ -261,4 +261,47 @@ assert "&lt;b&gt;" in karte and "<b>" not in karte and 'referrerpolicy="no-refer
 assert ">AW</div>" in benutzer_karte("Annika Wahl", "a@x.de", None)
 assert "javascript" not in benutzer_karte("X", "x@x.de", "javascript:alert(1)")
 
+# Kalenderabgleich (Bewirtung / Übernachtung <-> Termin)
+from datetime import datetime as _dt  # noqa: E402
+
+from kalender import ZEITZONE, Termin, abgleichen, stadt_aus_adresse, termin_aus_api  # noqa: E402
+
+
+def _t(titel, start, ende, ort="", teilnehmer=(), ganztags=False):
+    return Termin(titel, _dt.fromisoformat(start).replace(tzinfo=ZEITZONE),
+                  _dt.fromisoformat(ende).replace(tzinfo=ZEITZONE), ganztags, ort, "", list(teilnehmer))
+
+
+assert stadt_aus_adresse("Große Himmelsgasse 6, 67346 Speyer") == "Speyer"
+essen = BelegAnalyse.model_validate({"kategorie": "restaurant_mit_ec_beleg", "datum": "2026-09-04",
+                                     "uhrzeit": "18:30", "restaurant_name": "Hausbrauerei im Domhof",
+                                     "adresse": "Große Himmelsgasse 6, 67346 Speyer"})
+# passt zeitlich (Termin 16:30–18:15, Zahlung 18:30)
+ab = abgleichen(essen, [_t("Abendessen Kunde Müller", "2026-09-04T16:30", "2026-09-04T18:15",
+                           teilnehmer=["Herr Müller", "Simon Jäger"])])
+assert ab.status == "passend" and ab.termin.teilnehmer == ["Herr Müller", "Simon Jäger"], ab
+# passt über den Namen, obwohl ohne Uhrzeit
+ohne_zeit = essen.model_copy(update={"uhrzeit": None})
+assert abgleichen(ohne_zeit, [_t("Team-Essen Domhof", "2026-09-04T12:00", "2026-09-04T13:00")]).status == "passend"
+# Termin am Tag, aber falsche Zeit und anderer Ort -> Nachfrage, Termin als Kandidat
+ab = abgleichen(essen, [_t("Zahnarzt", "2026-09-04T08:00", "2026-09-04T09:00", ort="Mannheim")])
+assert ab.status == "kein_termin" and len(ab.kandidaten) == 1 and ab.nachfrage_grund
+# gar kein Termin
+assert abgleichen(essen, []).status == "kein_termin"
+# Übernachtung: mehrtägige Reise über das Rechnungsdatum bzw. Ort im Termin
+hotel = BelegAnalyse.model_validate({"kategorie": "uebernachtung", "datum": "2026-10-09",
+                                     "restaurant_name": "Hotel Adler", "adresse": "Markt 1, 80331 München"})
+assert abgleichen(hotel, [_t("Messe", "2026-10-07T00:00", "2026-10-10T00:00", ganztags=True)]).status == "passend"
+assert abgleichen(hotel, [_t("Kundentermin München", "2026-10-08T10:00", "2026-10-08T12:00")]).status == "passend"
+assert abgleichen(hotel, [_t("Kundentermin Köln", "2026-10-08T10:00", "2026-10-08T12:00")]).status == "kein_termin"
+# Tankbeleg braucht keinen Termin
+assert abgleichen(aral, []).status == "nicht_noetig"
+# Google-API-Format
+api = termin_aus_api({"summary": "Essen", "start": {"dateTime": "2026-09-04T16:30:00Z"},
+                      "end": {"dateTime": "2026-09-04T18:00:00Z"}, "location": "Speyer",
+                      "attendees": [{"email": "a@x.de", "displayName": "Anna"}, {"email": "raum@x.de", "resource": True},
+                                    {"email": "nein@x.de", "responseStatus": "declined"}]})
+assert api.start.hour == 18 and api.teilnehmer == ["Anna"]  # UTC -> Berlin (Sommerzeit), ohne Räume/Absagen
+assert termin_aus_api({"start": {"date": "2026-10-07"}, "end": {"date": "2026-10-10"}}).ganztags
+
 print("Alle Logik-Tests bestanden.")

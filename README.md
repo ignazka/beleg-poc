@@ -33,6 +33,8 @@ python test_logik.py   # Tests ohne API-Aufruf
 | `pipeline.py` | Ablauf einer Analyse: doppelt lesen (Original + Kontrast-Variante, parallel), vergleichen, bei Zweifel Schiedsrichter-Modell in höherer Auflösung |
 | `kategorien.py` | Kategorien aus der App: Versionen (nur anhängen), Standard + eigene, Prompt-Abschnitt, Fingerabdruck für die Prompt-Version, KI-Assistent (Freitext → Regeln + Rückfragen) |
 | `testlauf.py` | Testlauf einer Kategorie: Beispielbelege mit gespeichertem vs. geändertem Kategorie-Wissen analysieren und vergleichen |
+| `kalender.py` | Abgleich Bewirtung/Übernachtung ↔ Termin im Firmen-Google-Kalender (Regeln, Teilnehmer-Vorschlag); Zugriff in `storage.kalender_abgleichen` |
+| `marke.py` | Titel „PraktikantAI“ + „powered by RE-ALIS“, Fußzeile der Login-Seite |
 | `checks.py` | Rechenprüfungen (Steuerzeilen = Gesamtbetrag, MwSt. passt zum Satz, EC ≥ Rechnung, Datum) und `nachfragen_gruende` (Regeln, wann ein Mensch draufschauen muss) |
 | `extraction.py` | `MODEL`, Bildaufbereitung (PDF → Bilder, EXIF-Drehung, max. 2000 px bzw. 1600 px ab 6 Seiten, JPEG), mehrere Dateien = ein Beleg (`dateien_zu_bildern`, max. `MAX_SEITEN` = 20), API-Call, JSON-Extraktion |
 | `auth.py` | Google-Login über `st.login`, nur E-Mails aus `[zugang].erlaubte_emails`. Fail closed: ohne `[auth]` oder mit leerer Liste ist die App gesperrt |

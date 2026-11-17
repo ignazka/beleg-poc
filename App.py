@@ -1,6 +1,7 @@
 """Praktikant-AI (RE-ALIS) – Belege analysieren, Nachfragen, Kategorien, Auswertung."""
 
 import csv
+import html
 import io
 import time
 from pathlib import Path
@@ -27,6 +28,7 @@ from prompts import prompt_version, system_prompt
 from storage import (
     AblageFehler,
     ablage_beschreibung,
+    ablage_link,
     ablage_pruefen,
     beleg_speichern,
     datei_hash,
@@ -40,6 +42,7 @@ from storage import (
     beispielbelege,
     kategorie_dokument_ablegen,
     kategorie_speichern,
+    kalender_abgleichen,
     kategorien_laden,
     feedback_speichern,
     nachfrage_speichern,
@@ -65,7 +68,13 @@ try:
 except AblageFehler as e:
     st.error(f"Ablage nicht verfügbar: {e}")
     st.stop()
-st.sidebar.caption(f"Ablage: {ablage_beschreibung()}")
+_link = ablage_link()
+st.sidebar.caption(
+    f"Ablage: [{ablage_beschreibung()} :material/open_in_new:]({_link})" if _link
+    else f"Ablage: {ablage_beschreibung()}",
+    help="Öffnet den Drive-Ordner mit Belegen, Nachfragen und Feedback in einem neuen Tab. "
+         "Funktioniert nur für Personen, die auf den Ordner Zugriff haben." if _link else None,
+)
 
 # Kategorie-Wissen aus der App -> gültige Kategorien + Prompt (gilt für alle Benutzer gleich)
 try:
@@ -118,6 +127,11 @@ def _beleg_verarbeiten(dateien, status=None) -> dict:
     t0 = time.time()
     lese = beleg_lesen(bilder, dateien, status=status, system=SYSTEM_PROMPT_AKTUELL)
     gruende = list(lese.gruende)
+    if status:
+        status("Gleiche mit dem Firmenkalender ab …")
+    kalender = kalender_abgleichen(lese.analyse)
+    if kalender.nachfrage_grund:
+        gruende.append(kalender.nachfrage_grund)
     if seiten_gelesen < seiten_gesamt:
         gruende.append(f"Nur {seiten_gelesen} von {seiten_gesamt} Seiten gelesen (Obergrenze {MAX_SEITEN}).")
     return {
@@ -139,6 +153,7 @@ def _beleg_verarbeiten(dateien, status=None) -> dict:
         "usage": lese.usage,
         "dauer_s": round(time.time() - t0, 1),
         "prompt_version": PROMPT_VERSION,
+        "kalender": kalender,
     }
 
 
@@ -262,6 +277,7 @@ def _nachfrage_ablegen(erg) -> str:
             "analyse": analyse.model_dump(),
             "rohantwort": erg["raw"],
             "lesungen": _lesungen_protokoll(erg),
+            "kalender": erg["kalender"].als_dict() if erg.get("kalender") else None,
             "modell": erg["modell"],
             "prompt_version": erg["prompt_version"],
             "benutzer_email": aktueller_benutzer(),
@@ -332,6 +348,32 @@ def _pruefzeile(name: str, ok: bool) -> str:
     return f"- {':material/check_circle:' if ok else ':material/cancel:'} {name}: **{'ja' if ok else 'nein'}**"
 
 
+def _zeige_kalender(k: dict) -> None:
+    """Ergebnis des Kalenderabgleichs (auch für gespeicherte Nachfragen, daher als dict)."""
+    if not k or k["status"] == "nicht_noetig":
+        return
+    if k["status"] == "nicht_eingerichtet":
+        st.caption(":material/event: Kalenderabgleich ist noch nicht eingerichtet.")
+        return
+    t = k.get("termin")
+    if k["status"] == "passend" and t:
+        zeilen = [f"**Kalendertermin:** {t['titel']} · {t['zeitraum']}" + (f" · {t['ort']}" if t["ort"] else ""),
+                  k["grund"]]
+        if t["teilnehmer"]:
+            zeilen.append("**Teilnehmer laut Kalender** (Vorschlag für „bewirtete Personen“): "
+                          + ", ".join(t["teilnehmer"]))
+        if t.get("link"):
+            zeilen.append(f"[Termin im Kalender öffnen]({t['link']})")
+        st.info("\n\n".join(zeilen), icon=":material/event_available:")
+        return
+    st.warning(f"**Kein passender Kalendertermin:** {k['grund']}", icon=":material/event_busy:")
+    if k.get("kandidaten"):
+        with st.expander(f"Termine im Zeitraum ({len(k['kandidaten'])}) – vielleicht ist einer davon gemeint"):
+            for kand in k["kandidaten"]:
+                st.markdown(f"- {kand['titel']} · {kand['zeitraum']}" + (f" · {kand['ort']}" if kand["ort"] else "")
+                            + (f" · Teilnehmer: {', '.join(kand['teilnehmer'])}" if kand["teilnehmer"] else ""))
+
+
 def zeige_ergebnis(erg):
     analyse = erg["analyse"]
     gruende = erg.get("nachfrage_gruende") or []
@@ -377,7 +419,11 @@ def zeige_ergebnis(erg):
             _pruefzeile("Rechnung geht rechnerisch auf", not erg.get("befunde")),
             _pruefzeile("Zweimal gleich gelesen", not erg.get("abweichungen")),
         ] + ([_pruefzeile("EC-Beleg passt zur Rechnung", analyse.ec_passt_zur_rechnung)]
-             if analyse.ec_passt_zur_rechnung is not None else [])))
+             if analyse.ec_passt_zur_rechnung is not None else [])
+          + ([_pruefzeile("Passender Kalendertermin", erg["kalender"].status == "passend")]
+             if erg.get("kalender") and erg["kalender"].status in ("passend", "kein_termin", "fehler") else [])))
+        if erg.get("kalender"):
+            _zeige_kalender(erg["kalender"].als_dict())
         if erg.get("schiedsrichter"):
             geklaert = len(erg.get("abweichungen", {})) - len(erg.get("ungeklaert", []))
             st.caption(
@@ -528,6 +574,7 @@ def _feedback_ablegen(erg, analyse, kat_korrekt, felder, hinweise_ok, kommentar,
         "schiedsrichter": erg.get("schiedsrichter", False),
         "abweichungen": {f: list(w) for f, w in erg.get("abweichungen", {}).items()},
         "lesungen": _lesungen_protokoll(erg),
+        "kalender": erg["kalender"].als_dict() if erg.get("kalender") else None,
         "prompt_version": erg["prompt_version"],
         "dauer_s": erg["dauer_s"],
         "usage": erg["usage"],
@@ -774,6 +821,8 @@ def _nachfrage_bearbeiten(n: dict, letzte: dict | None):
             "Die Felder zeigen, was die KI gelesen hat. Bitte mit dem Beleg vergleichen und nur Falsches "
             "korrigieren. Beträge wie 1.234,50 – Datum als TT.MM.JJJJ."
         )
+        if n.get("kalender"):
+            _zeige_kalender(n["kalender"])
         if analyse.korrekturen:
             st.info("**Vom Code umgedeutet**\n\n" + "\n".join(f"- {k}" for k in analyse.korrekturen),
                     icon=":material/calculate:")
@@ -1078,27 +1127,38 @@ def _zeige_testlauf(wahl: str, k: dict, praefix: str) -> None:
                             index=_standard_ordner(name, ordner) if ordner else 0, key=f"{praefix}_testordner")
     ordnername = name if gewaehlt == neuer else gewaehlt
     belege = beispielbelege(ordnername) if gewaehlt != neuer else []
-    st.caption(f"{len(belege)} Beispielbeleg(e) im Ordner „{ordnername}“"
-               + (f" – getestet werden die ersten {MAX_TESTBELEGE}." if len(belege) > MAX_TESTBELEGE else "."))
+    anzahl = "1 Beispielbeleg" if len(belege) == 1 else f"{len(belege)} Beispielbelege"
+    st.markdown(
+        f'<p style="font-size:1.15rem;margin:.25rem 0 .75rem">'
+        f'<strong>{anzahl.split(" ")[0]}</strong> {anzahl.split(" ", 1)[1]} im Ordner „{html.escape(ordnername)}“'
+        + (f" – getestet werden die ersten <strong>{MAX_TESTBELEGE}</strong>." if len(belege) > MAX_TESTBELEGE
+           else ("." if belege else " – bitte zuerst Belege hinzufügen."))
+        + "</p>",
+        unsafe_allow_html=True,
+    )
 
     upload_ok = st.session_state.pop(f"{praefix}_upload_ok", None)
     if upload_ok:
         st.success(upload_ok, icon=":material/check_circle:")
-    neue = st.file_uploader("Beispielbelege hinzufügen", type=["pdf", "jpg", "jpeg", "png"],
-                            accept_multiple_files=True, key=f"{praefix}_testupload")
-    if neue and st.button(f"{len(neue)} Datei(en) in „{ordnername}“ hochladen", icon=":material/upload:"):
-        try:
-            for datei in neue:
-                beispielbeleg_hochladen(ordnername, datei.name, datei.getvalue(), datei.type)
-        except Exception as e:
-            st.error(f"Hochladen fehlgeschlagen: {e}")
-        else:
-            st.session_state[f"{praefix}_upload_ok"] = f"{len(neue)} Beispielbeleg(e) in „{ordnername}“ abgelegt."
-            st.rerun(scope="fragment")  # nur das Fenster neu aufbauen, nicht schließen
 
-    if not belege:
-        return
-    if st.button("Probelauf starten", type="primary", icon=":material/science:"):
+    spalte_start, spalte_upload = st.columns(2)
+    starten = spalte_start.button("Probelauf starten", type="primary", icon=":material/science:",
+                                  width="stretch", disabled=not belege)
+    with spalte_upload.popover("Weitere Belege hinzufügen", icon=":material/upload:", width="stretch"):
+        neue = st.file_uploader(f"Belege für „{ordnername}“ auswählen", type=["pdf", "jpg", "jpeg", "png"],
+                                accept_multiple_files=True, key=f"{praefix}_testupload")
+        if neue and st.button(f"{len(neue)} Datei(en) hochladen", type="primary", icon=":material/upload:"):
+            try:
+                for datei in neue:
+                    beispielbeleg_hochladen(ordnername, datei.name, datei.getvalue(), datei.type)
+            except Exception as e:
+                st.error(f"Hochladen fehlgeschlagen: {e}")
+            else:
+                st.session_state[f"{praefix}_upload_ok"] = (
+                    f"{len(neue)} Beleg(e) in „{ordnername}“ abgelegt.")
+                st.rerun(scope="fragment")  # nur das Fenster neu aufbauen, nicht schließen
+
+    if starten:
         schluessel = wahl if wahl != _NEU else kat_schluessel(name)
         entwurf = {**KAT_STAND, schluessel: {**KAT_STAND.get(schluessel, {}),
                                              **_kategorie_aus_formular(schluessel, name, praefix),
