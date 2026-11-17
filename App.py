@@ -357,9 +357,13 @@ _VORSCHAU_SEITEN = 3  # mehr Seiten nur in der großen Ansicht
 
 @st.dialog("Beleg in voller Größe", width="large")
 def _beleg_gross(bilder: list[bytes], titel: str) -> None:
-    st.caption(titel)
-    for i, bild in enumerate(bilder, start=1):
-        st.image(bild, width="stretch", caption=f"Seite {i} von {len(bilder)}")
+    st.caption(f"{titel} · Klick aufs Bild schließt die Ansicht")
+    with st.container(key="grossbild"):
+        for i, bild in enumerate(bilder, start=1):
+            st.image(bild, width="stretch", caption=f"Seite {i} von {len(bilder)}")
+        # unsichtbarer Button über den Bildern (CSS): Klick schließt das Fenster (Neuladen ohne Dialog)
+        if st.button("Große Ansicht schließen", key="bildklick_schliessen"):
+            st.rerun()
 
 
 def _beleg_vorschau(bilder: list[bytes], titel: str, key: str) -> None:
@@ -1542,9 +1546,13 @@ st.markdown(
     + '[class*="st-key-belegbild_"] [data-testid="stImageContainer"]'
     ' {width: 100% !important; align-items: center; justify-content: center;}'
     # Bild selbst ist klickbar: unsichtbarer Button liegt darüber; Hover-Vollbild-Symbol ausblenden
-    '[class*="st-key-bildklick_"] {position: absolute !important; inset: 0; z-index: 2; height: 100% !important;}'
+    '[class*="st-key-bildklick_"] {position: absolute !important; inset: 0; z-index: 2; height: 100% !important;'
+    ' width: 100% !important;}'
     '[class*="st-key-bildklick_"] > div, [class*="st-key-bildklick_"] .stButton {height: 100%; width: 100%;}'
     '[class*="st-key-bildklick_"] button {width: 100% !important; height: 100%; opacity: 0; cursor: zoom-in;}'
+    '.st-key-grossbild {position: relative;}'
+    '.st-key-grossbild [data-testid="stElementToolbar"] {display: none;}'
+    '.st-key-bildklick_schliessen button {cursor: zoom-out;}'
     '[class*="st-key-gross_"] button {width: auto !important; flex: 0 0 auto;}'
     '[class*="st-key-belegbild_"] [data-testid="stElementToolbar"] {display: none;}'
     # Button und Seitenangabe mittig unter dem Bild
