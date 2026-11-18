@@ -90,36 +90,49 @@ def pruefen(a: BelegAnalyse) -> list[str]:
     return befunde
 
 
-def nachfragen_gruende(a: BelegAnalyse, befunde: list[str]) -> list[str]:
-    """Gründe, warum ein Mensch draufschauen muss. Leere Liste = kann automatisch weiter."""
+def _gruende_mit_art(a: BelegAnalyse, befunde: list[str]) -> list[tuple[str, bool]]:
+    """(Grund, fachlich). fachlich = genaueres Lesen ändert nichts (z. B. Auslandsbeleg) – dann bringt der
+    Schiedsrichter nichts, ein Mensch muss trotzdem draufschauen. Im Zweifel NICHT fachlich."""
     gruende = []
     if not a.lesbar or a.kategorie == "unlesbar":
-        gruende.append("Beleg nicht (vollständig) lesbar.")
-    if a.kategorie_unsicher:
-        gruende.append(f"Belegart unsicher: {a.kategorie_grund or 'ohne Begründung'}")
+        gruende.append(("Beleg nicht (vollständig) lesbar.", False))
+    if a.kategorie_unsicher:  # großes Modell ordnet oft sicherer ein
+        gruende.append((f"Belegart unsicher: {a.kategorie_grund or 'ohne Begründung'}", False))
     if a.kategorie == "sonstiger_beleg":
-        gruende.append("Belegart keiner bekannten Kategorie zuzuordnen.")
+        gruende.append(("Belegart keiner bekannten Kategorie zuzuordnen.", False))
     if a.kategorie == "nur_ec_beleg":
-        gruende.append("Nur Zahlungsnachweis, keine Rechnung – Rechnung anfordern.")
-    if a.fehlende_pflichtangaben:
-        gruende.append("Pflichtangaben laut Kategorie fehlen: " + ", ".join(a.fehlende_pflichtangaben))
+        gruende.append(("Nur Zahlungsnachweis, keine Rechnung – Rechnung anfordern.", True))
+    if a.fehlende_pflichtangaben:  # evtl. nur klein/handschriftlich -> hochaufgelöst nachsehen
+        gruende.append(("Pflichtangaben laut Kategorie fehlen: " + ", ".join(a.fehlende_pflichtangaben), False))
     if a.ausland:
-        gruende.append("Auslandsbeleg – dafür gilt eine abweichende Handhabe.")
-    if a.ec_passt_zur_rechnung is False:
-        gruende.append("EC-Beleg passt nicht zur Rechnung (Datum/Uhrzeit/Adresse/Name).")
+        gruende.append(("Auslandsbeleg – dafür gilt eine abweichende Handhabe.", True))
+    if a.ec_passt_zur_rechnung is False:  # kann an einem falsch gelesenen Datum/Betrag liegen
+        gruende.append(("EC-Beleg passt nicht zur Rechnung (Datum/Uhrzeit/Adresse/Name).", False))
 
     # Pflichtanforderungen der Buchhaltung an eine Quittung: lesbar, Steuersatz, Datum
     if a.kategorie not in ("unlesbar", "nur_ec_beleg"):
         if not a.steuersatz_erkennbar and not a.steuerzeilen:
-            gruende.append("Kein Steuersatz ausgewiesen.")
+            gruende.append(("Kein Steuersatz ausgewiesen.", False))
         elif a.steuersaetze and not a.ausland and set(a.steuersaetze) - {7, 19}:
             andere = ", ".join(f"{s:g} %" for s in a.steuersaetze if s not in (7, 19))
-            gruende.append(f"Ungewöhnlicher Steuersatz: {andere} (erwartet 7 % und/oder 19 %).")
+            # beide Lesungen sehen denselben Satz (sonst Abweichung) -> steht so auf dem Beleg
+            gruende.append((f"Ungewöhnlicher Steuersatz: {andere} (erwartet 7 % und/oder 19 %).", True))
         fehlend = [name for name, wert in (("Gesamtbetrag", a.brutto), ("Datum", a.datum)) if wert is None]
         if fehlend:
-            gruende.append("Pflichtangabe fehlt: " + ", ".join(fehlend))
-    gruende += [f"Rechenprüfung: {b}" for b in befunde]
+            gruende.append(("Pflichtangabe fehlt: " + ", ".join(fehlend), False))
+    gruende += [(f"Rechenprüfung: {b}", False) for b in befunde]
     return gruende
+
+
+def nachfragen_gruende(a: BelegAnalyse, befunde: list[str]) -> list[str]:
+    """Gründe, warum ein Mensch draufschauen muss. Leere Liste = kann automatisch weiter."""
+    return [text for text, _fachlich in _gruende_mit_art(a, befunde)]
+
+
+def nur_fachliche_gruende(a: BelegAnalyse, befunde: list[str]) -> bool:
+    """True, wenn es Nachfragegründe gibt und KEINER durch genaueres Lesen verschwinden könnte."""
+    gruende = _gruende_mit_art(a, befunde)
+    return bool(gruende) and all(fachlich for _text, fachlich in gruende)
 
 
 # ---------------------------------------------------------------------------

@@ -90,3 +90,44 @@ def test_rechenpruefung_loest_schiedsrichter_aus(pipeline, monkeypatch):
     erg = pipeline.beleg_lesen([b"BILD"])
     assert "gross" in aufrufe
     assert any(g.startswith("Rechenprüfung") for g in erg.gruende)
+
+
+# --- Schiedsrichter überspringen, wenn genaueres Lesen nichts ändert ------------------------------------
+
+def test_nur_fachlicher_grund_ohne_schiedsrichter(pipeline, monkeypatch):
+    ausland = {**SAUBER, "ausland": True}
+    aufrufe = ki(pipeline, monkeypatch, ausland, ausland, gross=RuntimeError("darf nicht gerufen werden"))
+    erg = pipeline.beleg_lesen([b"BILD"])
+    assert "gross" not in aufrufe and not erg.schiedsrichter
+    assert any("Auslandsbeleg" in g for g in erg.gruende)  # Nachfrage an den Menschen bleibt
+
+
+def test_fachlich_plus_lesbarer_grund_mit_schiedsrichter(pipeline, monkeypatch):
+    beides = {**SAUBER, "ausland": True, "kategorie_unsicher": True, "kategorie_grund": "nur Snacks"}
+    aufrufe = ki(pipeline, monkeypatch, beides, beides, gross=beides)
+    pipeline.beleg_lesen([b"BILD"])
+    assert "gross" in aufrufe
+
+
+def test_fachlich_aber_lesungen_weichen_ab_mit_schiedsrichter(pipeline, monkeypatch):
+    a, b = {**SAUBER, "ausland": True}, {**ANDERS, "ausland": True}
+    aufrufe = ki(pipeline, monkeypatch, a, b, gross=a)
+    pipeline.beleg_lesen([b"BILD"])
+    assert "gross" in aufrufe
+
+
+def test_einordnung_der_gruende():
+    from checks import nur_fachliche_gruende
+
+    def analyse(**x):
+        return BelegAnalyse.model_validate({**SAUBER, **x})
+
+    assert not nur_fachliche_gruende(analyse(), [])                                 # gar kein Grund
+    assert nur_fachliche_gruende(analyse(ausland=True), [])
+    assert nur_fachliche_gruende(analyse(kategorie="nur_ec_beleg"), [])
+    assert nur_fachliche_gruende(analyse(steuersaetze=[16], steuerzeilen=[]), [])    # Satz steht so da
+    assert not nur_fachliche_gruende(analyse(ausland=True), ["Summe passt nicht"])  # Rechenprüfung: lesen!
+    assert not nur_fachliche_gruende(analyse(kategorie_unsicher=True), [])
+    assert not nur_fachliche_gruende(analyse(fehlende_pflichtangaben=["Anlass"]), [])
+    assert not nur_fachliche_gruende(analyse(ec_passt_zur_rechnung=False), [])
+    assert not nur_fachliche_gruende(analyse(lesbar=False), [])

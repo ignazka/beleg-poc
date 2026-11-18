@@ -2,6 +2,8 @@
 
 1. Zwei Lesungen PARALLEL mit MODEL: Originalbild + Kontrast-Variante (unabhängigere Lesefehler).
 2. Stimmen alle wichtigen Felder überein und bestehen alle Prüfungen -> fertig.
+   Stimmen sie überein und gibt es nur rein fachliche Nachfragegründe (z. B. Auslandsbeleg) -> auch fertig,
+   ohne Schiedsrichter (genaueres Lesen ändert daran nichts); die Nachfrage bleibt.
 3. Sonst liest MODEL_GROSS. Dessen Ergebnis gilt. Ein Feld, in dem die beiden ersten Lesungen
    abwichen, gilt als geklärt, wenn das große Modell einer der beiden Lesungen zustimmt.
    Ungeklärte Felder + alle übrigen Prüfgründe -> Nachfrage.
@@ -11,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from beleg_schema import BelegAnalyse
-from checks import _gleich, abweichungen, anzeige_wert, nachfragen_gruende, pruefen, vergleichswerte
+from checks import _gleich, abweichungen, anzeige_wert, nachfragen_gruende, nur_fachliche_gruende, pruefen, vergleichswerte
 from extraction import SYSTEM_PROMPT, MODEL, MODEL_GROSS, AnalyseFehler, analysieren, dateien_zu_bildern, kontrast_variante
 
 
@@ -73,6 +75,10 @@ def beleg_lesen(bilder: list[bytes], dateien=None, status=None, system: str = SY
         gruende = nachfragen_gruende(basis.analyse, befunde)
         if len(gueltig) == 2 and not diff and not gruende:
             return LeseErgebnis(basis.analyse, basis.raw, MODEL, lesungen, befunde=befunde)
+        if len(gueltig) == 2 and not diff and nur_fachliche_gruende(basis.analyse, befunde):
+            # z. B. Auslandsbeleg: beide Lesungen stimmen, genaueres Lesen ändert nichts -> kein Schiedsrichter,
+            # aber Nachfrage an den Menschen bleibt
+            return LeseErgebnis(basis.analyse, basis.raw, MODEL, lesungen, befunde=befunde, gruende=gruende)
 
     # Zweifel -> großes Modell
     melden("Lesungen weichen ab oder Prüfung offen – großes Modell schaut nach …")

@@ -138,6 +138,13 @@ Der Schiedsrichter liest, wenn
 - die beiden Lesungen in mindestens einem Feld abweichen, **oder**
 - eine Prüfung fehlschlägt bzw. ein anderer Nachfragegrund vorliegt.
 
+**Ausnahme – rein fachliche Gründe** (`checks.nur_fachliche_gruende`): Stimmen beide Lesungen überein und
+lassen sich **alle** Nachfragegründe durch genaueres Lesen nicht ändern, liest der Schiedsrichter nicht –
+das spart Zeit und Kosten. Die Nachfrage an den Menschen bleibt. Rein fachlich sind: Auslandsbeleg, nur
+EC-Beleg (Rechnung fehlt), ungewöhnlicher Steuersatz (beide Lesungen sehen denselben Satz). Alles andere –
+Rechenprüfung, unsichere oder unbekannte Belegart, fehlende Pflichtangaben, EC passt nicht, unlesbar, kein
+Steuersatz/Datum/Betrag – geht im Zweifel weiter an den Schiedsrichter.
+
 Er liest in **höherer Auflösung** (2800 Pixel, PDFs mit 220 dpi), damit kleine Kassenbon-Schrift besser
 lesbar ist. **Sein Ergebnis gilt.** Ein abweichendes Feld gilt als geklärt, wenn der Schiedsrichter einer
 der beiden ersten Lesungen zustimmt. Danach laufen alle Prüfungen erneut.
