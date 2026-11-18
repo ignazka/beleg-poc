@@ -27,25 +27,26 @@ python test_logik.py   # Tests ohne API-Aufruf
 
 | Datei | Zweck |
 |---|---|
-| `App.py` | Nur Oberfläche. Tabs „Beleg analysieren“ (Upload → Ergebnis → Feedback), „Nachfragen“ (prüfen, korrigieren, freigeben/zurückstellen/verwerfen), „Kategorien“ (anlegen/bearbeiten/löschen) und „Auswertung“ |
+| `App.py` | Nur Oberfläche. Tabs „Belege hochladen“ (Upload → Ergebnis, jeder Beleg wird abgelegt), „Belege“ (alle Belege durchsehen, prüfen, korrigieren; Filter u. a. „Nachfragen offen“), „Kategorien“ (anlegen/bearbeiten/löschen, Probelauf) und „Auswertung“ (Kennzahlen, „Aus Korrekturen lernen“) |
 | `prompts.py` | System-Prompt + `PROMPT_VERSION` |
 | `beleg_schema.py` | `KATEGORIEN`, `FEEDBACK_FELDER`, Pydantic-Modell `BelegAnalyse` (+ `Steuerzeile`), Parsing/Vergleich. **Summen (MwSt., Netto) und Trinkgeld rechnet der Code** in `_ableiten` |
 | `pipeline.py` | Ablauf einer Analyse: doppelt lesen (Original + Kontrast-Variante, parallel), vergleichen, bei Zweifel Schiedsrichter-Modell in höherer Auflösung |
 | `kategorien.py` | Kategorien aus der App: Versionen (nur anhängen), Standard + eigene, Prompt-Abschnitt, Fingerabdruck für die Prompt-Version, KI-Assistent (Freitext → Regeln + Rückfragen) |
 | `testlauf.py` | Testlauf einer Kategorie: Beispielbelege mit gespeichertem vs. geändertem Kategorie-Wissen analysieren und vergleichen |
 | `kalender.py` | Abgleich Bewirtung/Übernachtung ↔ Termin im Firmen-Google-Kalender (Regeln, Teilnehmer-Vorschlag); Zugriff in `storage.kalender_abgleichen` |
+| `einfuehrung.py` + `assets/einfuehrung.js` | Interaktive Einführung (Knopf „Einführung starten“ in der Seitenleiste): Tour mit driver.js (per CDN), hebt Bereiche hervor, erklärt sie in Popups und wechselt dabei selbst die Tabs. Schritte und Texte in `assets/einfuehrung.js` |
 | `marke.py` | Titel „PraktikantAI“ + „powered by RE-ALIS“, Fußzeile der Login-Seite |
 | `checks.py` | Rechenprüfungen (Steuerzeilen = Gesamtbetrag, MwSt. passt zum Satz, EC ≥ Rechnung, Datum) und `nachfragen_gruende` (Regeln, wann ein Mensch draufschauen muss) |
 | `extraction.py` | `MODEL`, Bildaufbereitung (PDF → Bilder, EXIF-Drehung, max. 2000 px bzw. 1600 px ab 6 Seiten, JPEG), mehrere Dateien = ein Beleg (`dateien_zu_bildern`, max. `MAX_SEITEN` = 20), API-Call, JSON-Extraktion |
 | `auth.py` | Google-Login über `st.login`, nur E-Mails aus `[zugang].erlaubte_emails`. Fail closed: ohne `[auth]` oder mit leerer Liste ist die App gesperrt |
-| `storage.py` | Ein gemeinsamer Ordner für alle Benutzer. Mit `[google_drive]`: Drive-Ordner `belege/` + `feedback/` (eine JSON-Datei pro Bewertung). Dazu `nachfragen/`, `entscheidungen/`, `kategorien/` (alles nur anhängen) und lesbare Kategorie-Docs in `Anlage KI Assistent/<Kategorie>/`. Sonst lokal `data/` (bzw. `BELEG_DATENORDNER`): `feedback.jsonl`, `nachfragen.jsonl`, `belege/`, Rechte 0700/0600 |
+| `storage.py` | Ein gemeinsamer Ordner für alle Benutzer. Mit `[google_drive]`: Drive-Ordner `belege/`, `analysen/` (jede Analyse) + `feedback/` (eine JSON-Datei pro Prüfung). Dazu `nachfragen/` und `entscheidungen/` (ältere Versionen, nur gelesen), `kategorien/` (alles nur anhängen) und lesbare Kategorie-Docs in `Anlage KI Assistent/<Kategorie>/`. Sonst lokal `data/` (bzw. `BELEG_DATENORDNER`): `feedback.jsonl`, `nachfragen.jsonl`, `belege/`, Rechte 0700/0600 |
 | `drive_token_holen.py` | Einmalig lokal: Refresh-Token für den Drive-Zugriff erzeugen und Ordnerzugriff prüfen |
 | `assets/` | RE-ALIS-Logo und -Symbol (SVG, von re-alis.com, Farben direkt eingetragen). Design in `.streamlit/config.toml`: helles Theme, Marken-Orange (abgedunkelt auf `#C25100` für lesbare Buttons), Source Sans 3 |
 | `test_logik.py` | Assert-Tests für Parsing, Vergleich, JSON-Extraktion, Pydantic, Ableitungen und Prüfungen (inkl. echter Fälle Domhof/Aral) |
 
-**Ablauf:** Upload → `datei_zu_bildern` → `analysieren` (OpenRouter, Modell liest nur ab) → `BelegAnalyse`
-(Code rechnet Summen/Trinkgeld) → `pruefen` + `nachfragen_gruende` → bei Gründen sofort `nachfrage_speichern`
-→ Ergebnis in `st.session_state["ergebnis"]` → Feedback-Formular → `feedback_speichern`.
+**Ablauf:** Upload → `dateien_zu_bildern` → `beleg_lesen` (doppelt lesen, ggf. Schiedsrichter; Modell liest nur
+ab) → `BelegAnalyse` (Code rechnet Summen/Trinkgeld) → `pruefen` + `nachfragen_gruende` → sofort
+`analyse_speichern` (jeder Beleg) → Tab „Belege“: Mensch prüft/korrigiert → `feedback_speichern`.
 
 ## Fachliche Vorgaben der Buchhaltung (Bewirtung)
 
@@ -121,28 +122,6 @@ Cloud unter Settings → Secrets). Lokal ohne Login entwickeln: `LOGIN_DEAKTIVIE
 - Neue Feedback-Felder: in `FEEDBACK_FELDER` **und** in `BelegAnalyse` und im Prompt ergänzen.
 - Feedback-Format nur erweitern, nicht umbenennen. Alte JSONL-Zeilen müssen lesbar bleiben.
 
-## Stand (2026-11-17)
+## Stand und nächste Schritte
 
-Erledigt:
-- [x] Ergebnis bleibt im Session-State erhalten
-- [x] Feste Kategorien, gültiger Prompt, robustes Parsing, Pydantic
-- [x] Feedback pro Feld + Kategorie, Speicherung als JSONL, Auswertungs-Tab
-- [x] Tests ohne API, `requirements.txt`, `.gitignore`
-- [x] Google-Login, Ablage in Google Drive, öffentliche Datenschutzseite
-- [x] Modell liest nur ab, Code rechnet; Rechenprüfungen (`checks.py`); Beträge pro Steuersatz
-- [x] Kategorien Tankbeleg + Übernachtung, `kategorie_unsicher`, `ausland`, `ec_passt_zur_rechnung`
-- [x] Automatische Ablage unter „Nachfragen“
-
-Nicht getestet: echter Upload in der laufenden App mit echten Fotos/PDFs (nur synthetischer Beleg per API).
-
-## Nächste Schritte
-
-1. **Bewirtungsbeleg (Google-Doc) automatisch befüllen** aus den abgelesenen Daten + manuellen Angaben
-   (Anlass, Teilnehmer, Bewirtender) – siehe Vorgaben oben.
-2. **Nachfragen abarbeiten:** Status „erledigt“ + Korrektur direkt im Tab „Nachfragen“.
-3. **Pflichtangaben für Bewirtung** (mit Steuerberater klären): TSE-Daten / maschinelle Erstellung,
-   Name des Bewirtenden ab 250 €. **Anlass + Teilnehmer** manuell in der Oberfläche erfassen.
-4. Mehrere Dateien auf einmal hochladen, HEIC-Support (Handyfotos), `st.cache_data` über Datei-Hash.
-5. Weitere Belegarten (Parken, Bahn, Büromaterial) und eigene Ablesefelder für Tanken (Liter, Kraftstoff) und Übernachtung (Nächte, Frühstück getrennt).
-6. Datenmodell an **sevDesk-Voucher** ausrichten → Entwürfe per API anlegen.
-7. RAG über Kontierungsregeln und frühere Buchungen. Das gesammelte Feedback ist der Testdatensatz.
+Aktueller Stand, Arbeitsweise und Roadmap stehen in [CLAUDE.md](CLAUDE.md).

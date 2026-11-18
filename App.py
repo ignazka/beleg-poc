@@ -21,6 +21,7 @@ from testlauf import ausfuehren as testlauf_ausfuehren
 from testlauf import erwartete_kategorien
 from testlauf import zusammenfassung as testlauf_zusammenfassung
 from marke import APP_NAME, kopfzeile
+from einfuehrung import einfuehrung_ausfuehren, einfuehrung_knopf
 from kategorien import ASSISTENT_PROMPT, aktueller_stand, assistent_nachricht, labels, prompt_abschnitt, wissens_hash
 from kategorien import aktiv as kat_aktiv
 from kategorien import als_dokument as kat_dokument
@@ -79,6 +80,7 @@ st.sidebar.caption(
     help="Öffnet den Drive-Ordner mit Belegen, Nachfragen und Feedback in einem neuen Tab. "
          "Funktioniert nur für Personen, die auf den Ordner Zugriff haben." if _link else None,
 )
+einfuehrung_knopf()
 
 # Kategorie-Wissen aus der App -> gültige Kategorien + Prompt (gilt für alle Benutzer gleich)
 try:
@@ -1726,4 +1728,5 @@ st.caption(
     f"Proof of Concept · Modell `{MODEL}` (liest doppelt) · Schiedsrichter `{MODEL_GROSS}` · "
     f"Prompt-Version `{PROMPT_VERSION}`"
 )
+einfuehrung_ausfuehren()  # nur direkt nach Klick auf „Einführung starten“
 
