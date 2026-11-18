@@ -1,6 +1,8 @@
 # CLAUDE.md – PraktikantAI (beleg-poc)
 
-Hinweise für Claude in künftigen Sitzungen. Details zum Aufbau stehen in [README.md](README.md), der
+Hinweise für Claude in künftigen Sitzungen. Technischer Ablauf für Entwickler: [docs/TECHNIK.md](docs/TECHNIK.md);
+Plattform-Konzept (TS/React/Postgres, mehrere Firmen): [docs/KONZEPT_PLATTFORM.md](docs/KONZEPT_PLATTFORM.md). Bei Änderungen
+an Ablauf oder Datenablage `docs/TECHNIK.md` mitpflegen. Details zum Aufbau stehen in [README.md](README.md), der
 komplette Prüf- und Rechenablauf in [PRUEFABLAUF.md](PRUEFABLAUF.md) – beide bei Änderungen mitpflegen.
 
 ## Wozu die App dient

@@ -26,6 +26,9 @@ python -m pytest       # alle Tests, ohne API/Drive/Secrets (ca. 10 s)
 
 **Wie gelesen, gerechnet und geprüft wird: siehe [PRUEFABLAUF.md](PRUEFABLAUF.md).**
 
+**Technischer Ablauf für Entwickler (wie die KI „lernt“, wie gespeichert wird):
+[docs/TECHNIK.md](docs/TECHNIK.md).** Weiterentwicklung zur Plattform: [docs/KONZEPT_PLATTFORM.md](docs/KONZEPT_PLATTFORM.md).
+
 | Datei | Zweck |
 |---|---|
 | `App.py` | Nur Oberfläche. Tabs „Belege hochladen“ (Upload → Ergebnis, jeder Beleg wird abgelegt), „Belege“ (alle Belege durchsehen, prüfen, korrigieren; Filter u. a. „Nachfragen offen“), „Kategorien“ (anlegen/bearbeiten/löschen, Probelauf) und „Auswertung“ (Kennzahlen, „Aus Korrekturen lernen“) |
