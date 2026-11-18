@@ -312,6 +312,26 @@ Dazu Trefferquote pro Feld und pro Belegart, die Verwechslungen und ein Hinweis,
 Belegart eine **neu angelegte Kategorie** betrifft (die KI kannte sie bei der Analyse evtl. noch nicht).
 Filter nach Prompt-Version und Modell sind aufklappbar.
 
+### Lesequalität (Tab „Auswertung“)
+
+Datei: `lesequalitaet.py`, Anzeige `App.py` (`_zeige_lesequalitaet`)
+
+Jede Analyse speichert ihre Lesungen (Lesung 1 Original, Lesung 2 Kontrast, ggf. Schiedsrichter). Für jeden
+geprüften Beleg wird jede Lesung Feld für Feld mit dem richtigen Wert verglichen – genauso wie im
+Prüfformular (Beträge auf den Cent, Text ohne Groß-/Kleinschreibung, Steuersätze als Menge). Angezeigt
+werden:
+
+- **Tabelle** je Feld, zusammengefasst je Feldart (Textfelder, Beträge und Steuersätze, Datum und Uhrzeit)
+  und für die Belegart: Trefferquote jeder Lesung und des Endergebnisses; unter 100 % hell, unter 90 % kräftiger
+  hinterlegt.
+- **Zähler**: Schiedsrichter eingesetzt / rettete (beide ersten falsch, er richtig) / verschlechterte (eine
+  der ersten richtig, Endergebnis falsch); „Nur Original richtig“ bzw. „Nur Kontrast richtig“.
+- **Endergebnis je Belegtyp** (Foto/PDF, ein-/mehrseitig).
+- Ab 10 Belegen **Hinweise**, z. B. schwächste Feldart, Schiedsrichter ohne Nutzen, Kontrast-Lesung ohne Nutzen.
+
+Kein Modellaufruf. Grundlage für Entscheidungen wie Bildaufbereitung verbessern, eine Lesung weglassen oder
+ein spezielles Texterkennungs-Modell (OCR) als zusätzliche Gegenprobe für bestimmte Felder einsetzen.
+
 ### Aus Korrekturen lernen (Tab „Auswertung“)
 
 Datei: `App.py` (`_aus_korrekturen_lernen`, `_lernfaelle`), Prompt `kategorien.py` (`LERN_PROMPT`)

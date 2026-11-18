@@ -40,6 +40,8 @@ Tabs (in `App.py`):
    (Belegart, Felder, pro Feld/Belegart, Verwechslungen) und **„Aus Korrekturen lernen“**: großes Modell
    ordnet Korrekturen Ursachen zu und schlägt Ergänzungen für Kategorien vor; Übernahme nur als
    ungespeicherte Änderung im Kategorien-Tab (Mensch prüft, testet, speichert).
+   Dazu **„Lesequalität“** (`lesequalitaet.py`): welche Lesung je Feld richtig lag – Grundlage für die
+   Entscheidung über ein zusätzliches OCR-Modell (Plan: Stufe 2, Vergleichsskript mit lokalem OCR).
 
 **Einführung:** startet beim allerersten Öffnen in einem Browser automatisch (Merker
 `praktikantai_tour_gesehen` im localStorage) und jederzeit über „Einführung starten“ in der Seitenleiste. Tour (driver.js 1.3.1 per CDN,
@@ -137,6 +139,10 @@ Kurzfristig:
 - **Kalenderabgleich einrichten** (Aufgabe des Nutzers): `[kalender].kalender_id` in den Secrets,
   Calendar API aktivieren, `python drive_token_holen.py --kalender` mit einem Konto, das den
   Firmenkalender sehen darf (z. B. Annika).
+- **Texterkennung (OCR), Stufe 2:** Wenn „Lesequalität“ mit genug Belegen (einige Dutzend) eine klare
+  Schwachstelle zeigt (bisher: Textfelder/Adresse in den ersten Lesungen), Vergleichsskript außerhalb der App:
+  geprüfte Belege + Beispielordner mit 1–2 lokalen OCR-Kandidaten (z. B. PaddleOCR, Surya, docTR) lesen und
+  gegen die richtigen Werte messen; bei Erfolg OCR-Text als zusätzliche Gegenprobe in `pipeline.py`.
 - **Verbesserungsrunden:** Prüfungen sammeln (ab ca. 20–30 Korrekturen), „Aus Korrekturen lernen“
   ausführen, Vorschläge im Kategorien-Tab testen und übernehmen; Wirkung über die Prompt-Version in der
   Auswertung vergleichen.

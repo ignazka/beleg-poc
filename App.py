@@ -30,6 +30,7 @@ from kategorien import schluessel_aus_name as kat_schluessel
 from kategorien import sichtbar as kat_sichtbar
 from kategorien import FELD_LABEL as KAT_FELD_LABEL
 from kategorien import LERN_PROMPT, URSACHEN, lern_antwort_pruefen, lern_nachricht
+import lesequalitaet
 from prompts import prompt_version, system_prompt
 from storage import (
     AblageFehler,
@@ -729,7 +730,116 @@ def zeige_auswertung():
                 for e in verwechslungen))
 
     st.divider()
+    _zeige_lesequalitaet(eintraege)
+    st.divider()
     _aus_korrekturen_lernen(eintraege)
+
+
+# ---------------------------------------------------------------------------
+# Lesequalität: welche Lesung lag richtig? (lesequalitaet.py)
+# ---------------------------------------------------------------------------
+
+_LQ_SPALTEN = {**lesequalitaet.VARIANTEN, "ergebnis": "Endergebnis"}
+
+
+def _lq_zelle(zaehler) -> str:
+    q = lesequalitaet.quote(zaehler)
+    return "–" if q is None else f"{q:.0%} ({zaehler[0]}/{zaehler[1]})".replace("%", " %")
+
+
+def _lq_hinweise(erg: dict) -> list[str]:
+    """Erste Schlussfolgerungen – nur, wenn genug Belege da sind."""
+    if erg["belege"] < 10:
+        return []
+    hinweise = []
+    gruppen = {name: lesequalitaet.quote(z.get("ergebnis")) for name, z in erg["gruppen"].items()}
+    gruppen = {n: q for n, q in gruppen.items() if q is not None}
+    if gruppen:
+        schwach, q = min(gruppen.items(), key=lambda x: x[1])
+        if q < 0.95:
+            hinweise.append(f"Schwachstelle sind die **{schwach}** ({q:.0%} richtig im Endergebnis)."
+                            .replace("%", " %"))
+    sr = erg["schiedsrichter"]
+    if sr["eingesetzt"] >= 5 and not sr["gerettet"]:
+        hinweise.append("Der Schiedsrichter hat bisher kein Feld gerettet – lohnt sich sein Aufruf?")
+    if sr["verschlechtert"]:
+        hinweise.append(f"In {sr['verschlechtert']} Feld(ern) lag eine der ersten Lesungen richtig, das Endergebnis "
+                        "aber falsch – dort hat der Schiedsrichter verschlechtert.")
+    if erg["belege"] >= 20 and not erg["nur_kontrast"]:
+        hinweise.append("Die Kontrast-Lesung war bisher nie als einzige richtig – sie dient nur noch als Gegenprobe.")
+    return hinweise
+
+
+def _zeige_lesequalitaet(eintraege: list[dict]) -> None:
+    import pandas as pd
+
+    st.markdown("**Lesequalität**")
+    st.caption(
+        "Welche Lesung lag bei den geprüften Belegen richtig? Jeder Beleg wird zweimal gelesen (Original und "
+        "Kontrast-Variante), bei Zweifel liest der Schiedsrichter in hoher Auflösung. So seht ihr, wo falsch "
+        "gelesen wird und ob die zusätzlichen Lesungen etwas bringen. Endergebnis = das, was die App ausgegeben hat."
+    )
+    try:
+        belege = {b["sha"]: b for b in _alle_belege()}
+    except Exception as ex:
+        st.error(f"Lesungen konnten nicht geladen werden: {ex}")
+        return
+    faelle = []
+    for e in eintraege:
+        b = belege.get(e.get("datei_sha256")) or {}
+        a = b.get("analyse_eintrag") or {}
+        faelle.append({"bewertung": e, "lesungen": a.get("lesungen") or e.get("lesungen"),
+                       "dateiname": e.get("dateiname") or a.get("dateiname"),
+                       "seiten": a.get("seiten") or e.get("seiten")})
+    erg = lesequalitaet.auswerten(faelle)
+    if not erg["belege"]:
+        st.info("Noch keine geprüften Belege mit gespeicherten Lesungen.")
+        return
+
+    sr = erg["schiedsrichter"]
+    badges = [
+        ("gray", f"Belege mit Lesungen · {erg['belege']}"),
+        ("blue", f"Schiedsrichter eingesetzt · {sr['eingesetzt']}"),
+        ("green", f"Schiedsrichter rettete · {sr['gerettet']} Feld(er)"),
+        ("red" if sr["verschlechtert"] else "gray", f"Schiedsrichter verschlechterte · {sr['verschlechtert']}"),
+        ("gray", f"Nur Original richtig · {erg['nur_original']}"),
+        ("gray", f"Nur Kontrast richtig · {erg['nur_kontrast']}"),
+    ]
+    st.markdown("  ".join(f":{farbe}-badge[{text}]" for farbe, text in badges),
+                help="„rettete“: beide ersten Lesungen falsch, Schiedsrichter richtig. „verschlechterte“: eine der "
+                     "ersten Lesungen war richtig, das Endergebnis trotzdem falsch. „Nur … richtig“: Felder, in "
+                     "denen genau eine der beiden ersten Lesungen stimmte.")
+    if erg["belege"] < 20:
+        st.caption(f":material/info: Erst {erg['belege']} Belege – die Zahlen sind noch vorläufig, aussagekräftig "
+                   "wird es ab einigen Dutzend.")
+
+    labels = {key: label for key, label, _t in FEEDBACK_FELDER}
+    zeilen, quoten = [], []
+    for name, zaehler in ([("Belegart", erg["belegart"])]
+                          + [(f"Σ {g}", z) for g, z in erg["gruppen"].items() if z]
+                          + [(labels[k], z) for k, z in erg["felder"].items() if z]):
+        zeilen.append({"Feld": name, **{titel: _lq_zelle(zaehler.get(v)) for v, titel in _LQ_SPALTEN.items()}})
+        quoten.append([None] + [lesequalitaet.quote(zaehler.get(v)) for v in _LQ_SPALTEN])
+    df = pd.DataFrame(zeilen)
+
+    def faerben(_df):  # unter 100 % hervorheben, unter 90 % deutlicher
+        farben = []
+        for q_zeile in quoten:
+            farben.append(["" if q is None or q >= 0.995 else
+                           ("background-color: #FDE7D9; color: #7A2E00" if q < 0.9 else
+                            "background-color: #FEF3EB; color: #7A2E00") for q in q_zeile])
+        return pd.DataFrame(farben, index=_df.index, columns=_df.columns)
+
+    stil = df.style.apply(faerben, axis=None).apply(
+        lambda zeile: ["font-weight: 600" if str(zeile["Feld"]).startswith(("Σ", "Belegart")) else ""] * len(zeile),
+        axis=1)
+    st.table(stil.hide(axis="index"))
+
+    if erg["je_typ"]:
+        st.caption("Endergebnis je Belegtyp: " + " · ".join(
+            f"{typ} {_lq_zelle(z)}" for typ, z in sorted(erg["je_typ"].items())))
+    for hinweis in _lq_hinweise(erg):
+        st.info(hinweis, icon=":material/lightbulb:")
 
 
 # ---------------------------------------------------------------------------
@@ -826,7 +936,8 @@ _URSACHE_ANZEIGE = {
                                     "wann nicht nachgefragt werden muss."),
     "bewertung_widerspruechlich": ("red", "Kommentar und Bewertung passen nicht zusammen – im Tab „Belege“ "
                                           "(Ansicht „Mit Kommentar“) öffnen und über „Korrigieren“ richtigstellen."),
-    "lesefehler": ("gray", "Zahl oder Text falsch abgelesen – lässt sich nicht über Regeln beheben."),
+    "lesefehler": ("gray", "Zahl oder Text falsch abgelesen – lässt sich nicht über Regeln beheben. Wo und wie oft "
+                           "falsch gelesen wird, zeigt „Lesequalität“ weiter oben."),
     "unklar": ("violet", "Die KI konnte keine eindeutige Ursache erkennen."),
 }
 
