@@ -1080,17 +1080,20 @@ def zeige_belege():
         return (f"{zeitpunkt_de(b['zeitpunkt'])} · {b['dateiname']} · {_kategorie_label(b['ki_kategorie'])}"
                 f" · {_BELEG_STATUS[b['status']]}")
 
-    spalte_wahl, spalte_zurueck, spalte_vor = st.columns([8, 1, 1], vertical_alignment="bottom")
-    sha = spalte_wahl.selectbox(f"Beleg auswählen ({len(liste)})", shas, format_func=beschriftung, key="beleg_wahl")
+    sha = st.selectbox(f"Beleg auswählen ({len(liste)})", shas, format_func=beschriftung, key="beleg_wahl")
     pos = shas.index(sha)
-    if spalte_zurueck.button("", icon=":material/chevron_left:", help="Vorheriger Beleg", disabled=pos == 0,
-                             width="stretch", key="beleg_zurueck"):
-        ss["beleg_wahl_naechste"] = shas[pos - 1]
-        st.rerun()
-    if spalte_vor.button("", icon=":material/chevron_right:", help="Nächster Beleg",
-                         disabled=pos == len(shas) - 1, width="stretch", key="beleg_vor"):
-        ss["beleg_wahl_naechste"] = shas[pos + 1]
-        st.rerun()
+    # Blättern: schmale Leiste unter der Auswahl – „‹ Vorheriger · Beleg 3 von 11 · Nächster ›“
+    with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center",
+                      key="beleg_blaettern"):
+        if st.button("Vorheriger", icon=":material/arrow_back:", type="tertiary", disabled=pos == 0,
+                     key="beleg_zurueck"):
+            ss["beleg_wahl_naechste"] = shas[pos - 1]
+            st.rerun()
+        st.markdown(f"Beleg **{pos + 1}** von {len(shas)}", width="content")
+        if st.button("Nächster", icon=":material/arrow_forward:", icon_position="right", type="tertiary",
+                     disabled=pos == len(shas) - 1, key="beleg_vor"):
+            ss["beleg_wahl_naechste"] = shas[pos + 1]
+            st.rerun()
 
     st.divider()
     _beleg_ansicht(nach_sha[sha], shas[pos + 1] if pos + 1 < len(shas) else None)
@@ -1689,6 +1692,12 @@ st.markdown(
     '.st-key-analyse_knopf button:disabled [data-testid="stMarkdownContainer"] {position: absolute; width: 1px;'
     ' height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;}'
     '.st-key-analyse_knopf button {min-width: 12rem;}'
+    # Blätterleiste im Tab „Belege“: als Links in der Akzentfarbe erkennbar, dicht unter der Auswahl
+    '.st-key-beleg_blaettern {margin-top: -.6rem; justify-content: center !important; gap: 1.5rem !important;}'
+    '.st-key-beleg_blaettern button:not(:disabled), .st-key-beleg_blaettern button:not(:disabled) p'
+    ' {color: #C25100; font-weight: 600;}'
+    '.st-key-beleg_blaettern button:not(:disabled):hover p {text-decoration: underline;}'
+    '.st-key-beleg_blaettern [data-testid="stMarkdownContainer"] p {color: #5B6170; font-size: .9rem;}'
     # solange der Knopf gesperrt ist (Analyse läuft), sind die anderen Tabs gesperrt
     '.stApp:has(.st-key-analyse_knopf button:disabled) .stTabs [role="tab"]:not([data-selected])'
     ' {pointer-events: none; opacity: .4;}'
