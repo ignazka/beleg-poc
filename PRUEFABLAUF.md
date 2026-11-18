@@ -21,9 +21,12 @@ Datei: `extraction.py` (`dateien_zu_bildern`)
 - Erlaubt: JPG, PNG, PDF. Bei mehreren Dateien fragt die App, wie sie gelesen werden sollen:
   - **Stapel** (Standard): Jede Datei ist ein eigener Beleg. Bis zu 30 Belege, 3 gleichzeitig, jeder mit
     dem vollen Ablauf. Ergebnis: Übersicht (stimmig / Nachfrage / Fehler, farbig), CSV-Download,
-    jeder Beleg im Detail ansehbar und bewertbar. Unklare Belege landen automatisch unter „Nachfragen“.
+    jeder Beleg im Detail ansehbar und bewertbar. **Jeder** analysierte Beleg wird abgelegt (Original +
+    Ergebnis in `analysen/`) und erscheint im Tab „Belege“.
   - **Ein Beleg**: Alle Dateien gehören zusammen, z. B. Rechnung + EC-Beleg oder mehrere Fotos einer
     langen Rechnung.
+- Während der Analyse zeigt der Knopf nur einen Spinner und die anderen Tabs sind gesperrt: Streamlit startet
+  das Skript bei jeder Eingabe neu, ein Klick in einem anderen Tab würde die Analyse abbrechen.
 - PDFs werden **vollständig** gelesen, bis 20 Seiten insgesamt. Mehr Seiten → Nachfrage.
 - Fotos werden automatisch gedreht (Handy-Ausrichtung) und auf höchstens 2000 Pixel verkleinert
   (ab 6 Seiten 1600 Pixel). PDF-Seiten werden mit 150 dpi in Bilder umgewandelt.
@@ -183,32 +186,42 @@ Einrichtung: `kalender_id` unter `[kalender]` in den Secrets. Zugriff entweder �
 Kalender für dieses Konto freigegeben ist) oder über einen eigenen Zugang mit Kalender-Leserecht:
 `python drive_token_holen.py --kalender`, angemeldet mit einem Konto, das den Kalender sehen darf (z. B. Annika).
 
-## 8. Nachfragen bearbeiten (Tab „Nachfragen“)
+## 8. Belege prüfen und korrigieren (Tab „Belege“)
 
-Datei: `App.py` (`zeige_nachfragen`, `_nachfrage_bearbeiten`), Ablage `storage.py` (`entscheidung_speichern`)
+Datei: `App.py` (`zeige_belege`, `_alle_belege`, `_beleg_formular`), Ablage `storage.py`
+(`analyse_speichern`, `feedback_speichern`)
 
-Im Moment geht es ums **Sammeln von Lernmaterial**: Jede Nachfrage wird korrigiert, begründet und
-gespeichert. Eine Auswahl wie Freigeben/Zurückstellen/Verwerfen gibt es (noch) nicht.
+Alle analysierten Belege an einer Stelle – auch solche, die schon als richtig abgehakt sind. Gerade jetzt, wo
+geprüft wird, ob die KI richtig einordnet, soll man alles durchsehen und jederzeit korrigieren können.
 
-1. Liste filtern: **Offen**, **Korrigiert** oder **Alle**. Die neuesten stehen oben.
-2. Nachfrage auswählen. Oben stehen die Gründe der KI, links das Original (alle Seiten), rechts die von der
-   KI gelesenen Werte als Formular.
-3. Werte mit dem Beleg vergleichen und nur Falsches korrigieren. Die **Belegart** wählt man aus der Liste der
-   Standard- und selbst angelegten Kategorien; noch nicht aktivierte Kategorien stehen als „(Entwurf)“ dabei,
-   gelöschte nicht. (Entwürfe fließen weiterhin nicht in den KI-Prompt ein, siehe Abschnitt 9.)
-4. **Begründung (Pflicht)**: Warum lag die KI falsch – oder warum war ihre Nachfrage unnötig?
-5. **„Korrigieren“** speichert. Danach erscheint oben die **Gegenüberstellung**: Feld, *Vorher (KI)*,
-   *Nachher (korrigiert)*; geänderte Zeilen rot, unveränderte grün. Unter „Korrigiert“ bleibt sie für jeden
-   erledigten Beleg sichtbar, „Noch einmal korrigieren“ legt eine neue Korrektur an.
+**Woher die Belege kommen** (`_alle_belege`, pro Datei-Hash zusammengeführt): jüngste Analyse (`analysen/`,
+neu) bzw. Nachfrage (`nachfragen/`, ältere Einträge), jüngste Prüfung (`feedback/`) und – nur noch lesend –
+Entscheidungen der ersten Version (`entscheidungen/`).
 
-Jede Korrektur ist ein **eigener Eintrag** (`entscheidungen/`) mit Person, Zeitpunkt, Begründung, den
-Gründen der KI und je Feld vorher/nachher. Nichts wird überschrieben (Stufe 1 des Leitfadens: Annika prüft
-und dokumentiert jede Korrektur). Einträge aus der ersten Version (Freigeben/Zurückstellen/Verwerfen)
-zählen als erledigt.
+**Status je Beleg**: *Nachfrage offen* (KI hat nachgefragt, noch niemand geprüft) · *Noch nicht geprüft* ·
+*Geprüft – alles richtig* · *Geprüft – korrigiert* · *Erledigt (ohne Bewertung)* (alte Entscheidung ohne
+Feldprüfung).
 
-Jede Korrektur **zählt zusätzlich als Feedback** (mit den Gründen der KI und der Begründung). Sie geht in
-die Trefferquote der Auswertung ein. Gerade die schwierigen Belege werden so zum Testmaterial und später zur
-Grundlage, die Anweisungen an die KI zu verbessern.
+**Filter** (oben, gut sichtbar): Nachfragen offen · Alle Nachfragen · Ungeprüft · Korrigiert · Mit Kommentar ·
+Alle. Beim Öffnen steht er dort, wo es etwas zu tun gibt. Der Tab zeigt die Zahl offener Nachfragen.
+
+**Ansicht**: Auswahlliste mit Vor/Zurück-Pfeilen. Oben die Gründe der KI (falls nachgefragt), links das
+Original (Klick aufs Bild oder „Größer ansehen“ = groß), rechts:
+
+- noch nicht geprüft → gleich das Formular: „Stimmt die Belegart …? Ja/Nein“ (ohne Vorauswahl), Felder mit
+  der KI-Lesung, Begründung. Bei Nachfragen ist die Begründung Pflicht (Knopf „Korrigieren“), sonst nur, wenn
+  man etwas ändert (Knopf „Prüfung speichern“). Danach springt die Ansicht zum nächsten Beleg.
+- geprüft → Belegart richtig/korrigiert und Tabelle „KI hat gelesen / Richtig ist“ (grün = stimmte,
+  rot = korrigiert), wer wann geprüft hat, Kommentar. „Korrigieren“ öffnet das Formular mit den bisher
+  richtigen Werten; „Abbrechen“ schließt es wieder. Begründung Pflicht.
+
+Nach dem Speichern steht oben die Gegenüberstellung der gerade gespeicherten Prüfung.
+
+**Gespeichert** wird jede Prüfung als **neuer** Feedback-Eintrag (nur anhängen, Stufe 1 des Leitfadens:
+Annika prüft und dokumentiert jede Korrektur): Person, Zeitpunkt, Belegart und jedes Feld KI/richtig,
+Begründung, Nachfragegründe der KI, Quelle (`nachfrage` / `pruefung`). Bei einer Korrektur zusätzlich
+`korrektur_von` und `kommentar_vorher`. Es zählt immer die jüngste Prüfung; verglichen wird immer mit der
+KI-Lesung. So fließt jede Prüfung in die Auswertung und in „Aus Korrekturen lernen“ ein.
 
 ## 9. Kategorien (Tab „Kategorien“) und wie die KI daraus lernt
 
@@ -271,8 +284,13 @@ vorausgewählt; bei „Nein“ wählt man die richtige. Ohne Antwort lässt sich
 KI-Kategorie vorausgewählt – wer sie nicht umstellte, bestätigte sie, auch wenn im Kommentar das Gegenteil
 stand.)
 
-Der Tab **„Auswertung“** (`zeige_auswertung`) zählt jeden bewerteten Beleg **einmal** (jüngste Bewertung
-pro Datei-Hash), aus Feedback und korrigierten Nachfragen:
+Der Tab **„Auswertung“** (`zeige_auswertung`) zeigt nur Zahlen und Zusammenfassungen – einzelne Belege
+sieht man im Tab „Belege“.
+
+**Belege und Nachfragen**: Belege gesamt, davon geprüft, Nachfragen der KI (davon offen) und *unnötige
+Nachfragen* (nachgefragt, bei der Prüfung war aber alles richtig – viele davon = Regeln zu streng).
+
+**Erkennungsqualität**: jeder geprüfte Beleg zählt **einmal** (jüngste Prüfung pro Datei-Hash):
 
 | Kennzahl | Bedeutung |
 |---|---|
@@ -284,16 +302,28 @@ Dazu Trefferquote pro Feld und pro Belegart, die Verwechslungen und ein Hinweis,
 Belegart eine **neu angelegte Kategorie** betrifft (die KI kannte sie bei der Analyse evtl. noch nicht).
 Filter nach Prompt-Version und Modell sind aufklappbar.
 
-**Bewertete Belege durchsehen:** Filter „Alle / Fehlerfrei / Mit Korrekturen / Mit Kommentar“, Beleg
-auswählen. Links das Original (Klick aufs Bild oder „Größer ansehen“ öffnet alle Seiten groß), rechts jedes
-Feld mit „KI hat gelesen“ und „Richtig ist“ – grün = stimmte, rot = korrigiert – plus Bewerter, Quelle
-(Feedback oder Nachfrage-Korrektur), Modell, Prompt-Version und Kommentar.
+### Aus Korrekturen lernen (Tab „Auswertung“)
 
-**Bewertung korrigieren:** Stimmt eine Bewertung nicht (z. B. Kommentar „Zimmerbuchung nicht erkannt“, aber
-Belegart als richtig gezählt), legt „Bewertung korrigieren“ eine **neue** Bewertung an: Belegart-Frage,
-Felder (vorbelegt mit den bisher richtigen Werten, verglichen wird immer mit der KI-Lesung) und Pflicht-
-Begründung. Die jüngste Bewertung zählt; die alte bleibt erhalten (`korrektur_von`, `kommentar_vorher`).
-Der Filter „Mit Kommentar“ hilft, solche Fälle zu finden.
+Datei: `App.py` (`_aus_korrekturen_lernen`, `_lernfaelle`), Prompt `kategorien.py` (`LERN_PROMPT`)
+
+Erst sammeln, dann in Runden abarbeiten – der Prompt ändert sich nie automatisch.
+
+1. **Fälle**: alle bewerteten Belege (jüngste Bewertung, Filter beachtet), die korrigiert, kommentiert oder
+   nachgefragt wurden – höchstens 60, die neuesten zuerst. Pro Fall gehen an das Modell: Belegart der KI und
+   die richtige, geänderte Felder (vorher/nachher), Nachfragegründe der KI, Kommentar/Begründung des Menschen
+   und Eckdaten des Belegs laut KI (Aussteller, Ausland, Begründung der Belegart, Hinweise).
+2. **„Verbesserungsvorschläge erstellen“** (großes Modell, ein Aufruf). Das Modell ordnet jeden Fall einer
+   Ursache zu – *Regel fehlte*, *Unnötige Nachfrage*, *Lesefehler* (auch „Unsicher gelesen“, weil zwei
+   Lesungen abwichen), *Bewertung widersprüchlich*, *Unklar* – und schlägt für Regel-Fälle je einen Satz
+   vor, der genau ein Feld einer Kategorie ergänzt. Überschneidet sich ein Vorschlag mit einer anderen
+   Kategorie, soll es eine Rückfrage stellen statt eines Vorschlags.
+3. **Absicherung im Code** (`lern_antwort_pruefen`): nur bestehende Kategorien und erlaubte Felder,
+   Fallnummern im gültigen Bereich; ein Vorschlag aus nur einem Fall gilt immer als „Einzelfall“.
+4. **„In Kategorie übernehmen“** setzt den Satz als **ungespeicherte Änderung** in das Feld der Kategorie im
+   Tab „Kategorien“ (mit Hinweis). Dort prüfen, mit „Testen“ den Probelauf machen und erst dann speichern –
+   das erzeugt eine neue Prompt-Version, deren Wirkung die Auswertung vorher/nachher zeigt.
+5. Widersprüchliche Bewertungen werden extra genannt, damit man sie im Tab „Belege“ (Ansicht „Mit
+   Kommentar“) über „Korrigieren“ richtigstellt. Die Vorschläge selbst werden nicht gespeichert (nur in der laufenden Sitzung).
 
 ## Was nicht abgesichert ist
 

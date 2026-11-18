@@ -309,7 +309,18 @@ def nachfragen_laden() -> list[dict]:
     return _eintraege_laden("nachfragen")
 
 
-# Entscheidungen zu Nachfragen: nur anhängen, nie überschreiben (Protokoll: wer hat wann was entschieden).
+# Jede Analyse (auch ohne Nachfrage) – damit im Tab „Belege“ alle Belege durchgesehen und korrigiert werden
+# können. Nur anhängen; wird derselbe Beleg erneut analysiert, gilt die jüngste Analyse.
+
+def analyse_speichern(eintrag: dict) -> None:
+    _eintrag_speichern("analysen", eintrag)
+
+
+def analysen_laden() -> list[dict]:
+    return _eintraege_laden("analysen")
+
+
+# Entscheidungen zu Nachfragen (erste Version, nur noch lesend): nur anhängen, nie überschreiben (Protokoll: wer hat wann was entschieden).
 # Der aktuelle Status einer Nachfrage ist die jüngste Entscheidung zu ihrem Datei-Hash.
 
 def entscheidung_speichern(eintrag: dict) -> None:

@@ -155,3 +155,81 @@ def assistent_nachricht(name: str, freitext: str, andere: dict[str, dict]) -> st
     uebrige = "\n".join(f"- {k['name']}: {_als_text(k.get('beschreibung'))[:200]}"
                         for k in andere.values())
     return f"Kategorie: {name}\n\nFreitext der Buchhaltung:\n{freitext}\n\nÜbrige Kategorien:\n{uebrige}"
+
+
+# ---------------------------------------------------------------------------
+# Aus Korrekturen lernen: gesammelte Korrekturen -> Vorschläge für das Kategorie-Wissen
+# ---------------------------------------------------------------------------
+
+LERN_FELDER = ("erkennungsmerkmale", "abgrenzung", "pflichtangaben", "nachfragen_wenn")
+URSACHEN = {
+    "regel": "Regel fehlte",
+    "nachfrage_zu_streng": "Unnötige Nachfrage",
+    "lesefehler": "Lesefehler",
+    "bewertung_widerspruechlich": "Bewertung widersprüchlich",
+    "unklar": "Unklar",
+}
+
+LERN_PROMPT = """Du hilfst, die Anweisungen einer Beleg-KI zu verbessern. Du bekommst das aktuelle
+Kategorie-Wissen der KI und Fälle, in denen ein Mensch ihr Ergebnis korrigiert oder kommentiert hat – jeweils
+mit den Gründen, aus denen die KI nachgefragt hat, und der Begründung bzw. dem Kommentar des Menschen.
+
+AUFGABE
+1. Ordne jeden Fall GENAU EINER Ursache zu:
+   - "regel": der KI fehlte Wissen oder eine Regel (z. B. Zimmer-Positionen bedeuten Übernachtung)
+   - "nachfrage_zu_streng": die KI hat nachgefragt, obwohl alles stimmte
+   - "lesefehler": Zahl oder Text falsch abgelesen – lässt sich nicht durch Regeln beheben. Dazu gehören auch
+     Nachfragen mit dem Grund "Unsicher gelesen": Sie entstehen, weil zwei Lesungen voneinander abweichen,
+     und lassen sich nicht durch Kategorie-Regeln ändern.
+   - "bewertung_widerspruechlich": Kommentar widerspricht der Bewertung (z. B. Belegart als richtig
+     bestätigt, aber der Kommentar beschreibt einen Fehler der Belegart)
+   - "unklar"
+2. Leite aus den Fällen "regel" und "nachfrage_zu_streng" Vorschläge ab, die das Kategorie-Wissen ergänzen.
+   - Nur allgemeingültige Regeln – keine Einzelheiten eines Belegs (keine Namen, Beträge, Daten, Orte).
+   - Stütze dich nur auf das, was in den Fällen steht ("beleg_laut_ki", Kommentar, Korrekturen). Wenn
+     unklar ist, was einen Beleg ausmacht, lieber eine Rückfrage als ein geratener Vorschlag.
+   - Lieber ein Vorschlag, der mehrere Fälle abdeckt, als viele kleine.
+   - Ein Vorschlag ergänzt GENAU EIN Feld GENAU EINER bestehenden Kategorie (Schlüssel aus dem
+     Kategorie-Wissen): "erkennungsmerkmale" | "abgrenzung" | "pflichtangaben" | "nachfragen_wenn".
+   - "text" ist nur der neue Satz zum Anhängen, nicht das ganze Feld. Nichts wiederholen, was schon dasteht.
+   - Unnötige Nachfragen: Regel in "nachfragen_wenn" präzisieren (wann gerade NICHT nachgefragt werden muss).
+   - Beruht ein Vorschlag auf nur einem Fall: "sicherheit": "niedrig".
+   - Prüfe jeden Vorschlag gegen ALLE anderen Kategorien: Würde er Belege einer anderen Kategorie mit
+     erfassen (z. B. "Hotel" bei Reisekosten, obwohl es eine Kategorie Übernachtung gibt), mache KEINEN
+     Vorschlag, sondern stelle eine Rückfrage zur Abgrenzung.
+3. Erfinde keine Firmenregeln. Was nur die Buchhaltung entscheiden kann, als Rückfrage formulieren.
+4. Deutsch, kurz und konkret.
+
+Antworte NUR mit JSON:
+{"faelle": [{"nr": 1, "ursache": "regel", "kurz": "ein Satz, was schiefging"}],
+ "vorschlaege": [{"kategorie": "<schluessel>", "feld": "erkennungsmerkmale", "text": "...",
+                  "begruendung": "...", "faelle": [1, 3], "sicherheit": "hoch|mittel|niedrig"}],
+ "rueckfragen": ["..."]}"""
+
+
+def lern_nachricht(stand: dict[str, dict], faelle: list[dict]) -> str:
+    """faelle: bereits aufbereitete, nummerierte Fälle (siehe App._lernfaelle)."""
+    return ("KATEGORIE-WISSEN (Schlüssel in Anführungszeichen):\n" + prompt_abschnitt(stand)
+            + "\n\nFÄLLE:\n" + json.dumps(faelle, ensure_ascii=False, indent=1))
+
+
+def lern_antwort_pruefen(antwort: dict, stand: dict[str, dict], anzahl_faelle: int) -> dict:
+    """Antwort des Modells absichern: nur bekannte Kategorien/Felder/Ursachen, Fallnummern im Bereich."""
+    gueltig = sichtbar(stand)
+
+    def nummern(werte):
+        return [n for n in (werte or []) if isinstance(n, int) and 1 <= n <= anzahl_faelle]
+
+    faelle = [{"nr": f["nr"], "ursache": f.get("ursache") if f.get("ursache") in URSACHEN else "unklar",
+               "kurz": str(f.get("kurz") or "")}
+              for f in antwort.get("faelle") or [] if isinstance(f, dict) and nummern([f.get("nr")])]
+    vorschlaege = [{
+        "kategorie": v["kategorie"], "feld": v["feld"], "text": str(v["text"]).strip(),
+        "begruendung": str(v.get("begruendung") or ""), "faelle": nummern(v.get("faelle")),
+        "sicherheit": ("niedrig" if len(nummern(v.get("faelle"))) <= 1 else  # ein Fall ist kein Muster
+                       v.get("sicherheit") if v.get("sicherheit") in ("hoch", "mittel", "niedrig") else "mittel"),
+    } for v in antwort.get("vorschlaege") or []
+        if isinstance(v, dict) and v.get("kategorie") in gueltig and v.get("feld") in LERN_FELDER
+        and str(v.get("text") or "").strip()]
+    return {"faelle": faelle, "vorschlaege": vorschlaege,
+            "rueckfragen": [str(r) for r in antwort.get("rueckfragen") or [] if str(r).strip()]}
