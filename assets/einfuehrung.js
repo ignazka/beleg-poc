@@ -119,10 +119,37 @@
     gehe(0);
   }
 
-  if (window.__praktikantTour && window.__praktikantTour.isActive()) window.__praktikantTour.destroy();
-  if (window.driver && window.driver.js) { starten(); return; }
-  const s = document.createElement("script");
-  s.src = "https://cdn.jsdelivr.net/npm/driver.js@1.3.1/dist/driver.js.iife.js";
-  s.onload = starten;
-  document.head.appendChild(s);
+  // Automatischer Start nur beim allerersten Öffnen in diesem Browser (Merker im localStorage);
+  // über den Knopf startet die Tour immer. TOUR_AUTO setzt einfuehrung.py davor.
+  const MERKER = "praktikantai_tour_gesehen";
+  let gesehen = false;
+  try { gesehen = !!localStorage.getItem(MERKER); } catch (e) { /* privates Fenster o. ä. */ }
+  if (window.TOUR_AUTO && gesehen) return;
+
+  const auto = !!window.TOUR_AUTO;  // jetzt merken – das nächste Skript setzt den Wert ggf. um
+  const laeuft = () => !!(window.__praktikantTour && window.__praktikantTour.isActive());
+  function laden() {
+    // Autostart unterbricht nie eine laufende Tour und startet nicht, wenn inzwischen eine lief
+    if (auto) {
+      let schonGesehen = false;
+      try { schonGesehen = !!localStorage.getItem(MERKER); } catch (e) { /* egal */ }
+      if (laeuft() || schonGesehen) return;
+    }
+    try { localStorage.setItem(MERKER, new Date().toISOString()); } catch (e) { /* egal */ }
+    if (laeuft()) window.__praktikantTour.destroy();
+    if (window.driver && window.driver.js) { starten(); return; }
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/driver.js@1.3.1/dist/driver.js.iife.js";
+    s.onload = starten;
+    document.head.appendChild(s);
+  }
+  // Warten, bis die Tabs gezeichnet sind und die App nicht mehr rechnet (erstes Laden holt die Daten aus
+  // Drive und kann dauern). Höchstens 2 Minuten, danach beim nächsten Öffnen erneut versuchen.
+  const bereit = () => document.querySelectorAll('.stTabs [role="tab"]').length >= 4 &&
+    !document.querySelector('[data-testid="stStatusWidget"] [data-testid="stStatusWidgetRunningIcon"], .stStatusWidget-running');
+  let versuche = 0;
+  (function warten() {
+    if (bereit()) setTimeout(laden, 800);
+    else if (versuche++ < 480) setTimeout(warten, 250);
+  })();
 })();

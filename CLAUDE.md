@@ -41,7 +41,8 @@ Tabs (in `App.py`):
    ordnet Korrekturen Ursachen zu und schlägt Ergänzungen für Kategorien vor; Übernahme nur als
    ungespeicherte Änderung im Kategorien-Tab (Mensch prüft, testet, speichert).
 
-**Einführung:** Knopf „Einführung starten“ in der Seitenleiste startet eine Tour (driver.js 1.3.1 per CDN,
+**Einführung:** startet beim allerersten Öffnen in einem Browser automatisch (Merker
+`praktikantai_tour_gesehen` im localStorage) und jederzeit über „Einführung starten“ in der Seitenleiste. Tour (driver.js 1.3.1 per CDN,
 `einfuehrung.py` + `assets/einfuehrung.js`). Neue oder umbenannte Bereiche dort nachziehen. Eigenheiten:
 Tabs werden über ihre Position gewählt und per Zeiger-Ereignissen geöffnet; jeder Schritt wird mit
 `highlight()` einzeln gezeigt, weil Ziele in unsichtbaren Tabs erst nach dem Wechsel existieren; im

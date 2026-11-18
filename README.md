@@ -34,7 +34,7 @@ python test_logik.py   # Tests ohne API-Aufruf
 | `kategorien.py` | Kategorien aus der App: Versionen (nur anhängen), Standard + eigene, Prompt-Abschnitt, Fingerabdruck für die Prompt-Version, KI-Assistent (Freitext → Regeln + Rückfragen) |
 | `testlauf.py` | Testlauf einer Kategorie: Beispielbelege mit gespeichertem vs. geändertem Kategorie-Wissen analysieren und vergleichen |
 | `kalender.py` | Abgleich Bewirtung/Übernachtung ↔ Termin im Firmen-Google-Kalender (Regeln, Teilnehmer-Vorschlag); Zugriff in `storage.kalender_abgleichen` |
-| `einfuehrung.py` + `assets/einfuehrung.js` | Interaktive Einführung (Knopf „Einführung starten“ in der Seitenleiste): Tour mit driver.js (per CDN), hebt Bereiche hervor, erklärt sie in Popups und wechselt dabei selbst die Tabs. Schritte und Texte in `assets/einfuehrung.js` |
+| `einfuehrung.py` + `assets/einfuehrung.js` | Interaktive Einführung (startet beim ersten Öffnen in einem Browser automatisch, danach über „Einführung starten“ in der Seitenleiste): Tour mit driver.js (per CDN), hebt Bereiche hervor, erklärt sie in Popups und wechselt dabei selbst die Tabs. Schritte und Texte in `assets/einfuehrung.js` |
 | `marke.py` | Titel „PraktikantAI“ + „powered by RE-ALIS“, Fußzeile der Login-Seite |
 | `checks.py` | Rechenprüfungen (Steuerzeilen = Gesamtbetrag, MwSt. passt zum Satz, EC ≥ Rechnung, Datum) und `nachfragen_gruende` (Regeln, wann ein Mensch draufschauen muss) |
 | `extraction.py` | `MODEL`, Bildaufbereitung (PDF → Bilder, EXIF-Drehung, max. 2000 px bzw. 1600 px ab 6 Seiten, JPEG), mehrere Dateien = ein Beleg (`dateien_zu_bildern`, max. `MAX_SEITEN` = 20), API-Call, JSON-Extraktion |

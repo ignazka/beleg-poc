@@ -1,5 +1,6 @@
-"""Interaktive Einführung: Knopf in der Seitenleiste startet eine Tour (driver.js) durch die Oberfläche.
+"""Interaktive Einführung: Tour (driver.js) durch die Oberfläche.
 
+Startet automatisch beim allerersten Öffnen in einem Browser und jederzeit über den Knopf in der Seitenleiste.
 Die Schritte stehen in assets/einfuehrung.js. Die Tour läuft komplett im Browser; sie wechselt die Tabs selbst
 und löst keine Eingaben aus (also auch keinen Neustart des Skripts).
 """
@@ -31,6 +32,13 @@ _STIL = """
 </style>
 """
 
+# Stylesheet von driver.js per Skript laden (<link> filtert Streamlit aus st.html heraus)
+_CSS_LADEN = (
+    "if (!document.querySelector('link[href=\"" + _DRIVER_CSS + "\"]')) {"
+    " const l = document.createElement('link'); l.rel = 'stylesheet';"
+    " l.href = '" + _DRIVER_CSS + "'; document.head.appendChild(l); }"
+)
+
 
 def einfuehrung_knopf() -> None:
     """Knopf in der Seitenleiste; ein Klick startet die Tour beim nächsten Zeichnen der Seite."""
@@ -39,17 +47,24 @@ def einfuehrung_knopf() -> None:
         st.session_state["einfuehrung_jetzt"] = time.time()
 
 
-def einfuehrung_ausfuehren() -> None:
-    """Am Ende des Skripts aufrufen (alle Elemente sind dann gezeichnet). Läuft nur direkt nach dem Klick."""
-    start = st.session_state.pop("einfuehrung_jetzt", None)
-    if not start:
-        return
+def _tour_html(auto: bool, kennung: str) -> str:
     skript = (_ASSETS / "einfuehrung.js").read_text(encoding="utf-8")
     # Streamlits HTML-Filter (DOMPurify) verwirft ein <script>, dessen Text nach Markup aussieht („<b>“ in den
     # Erklärtexten). Deshalb jedes „<“ vor Buchstabe, „/“ oder „!“ als \x3c schreiben – in JS-Strings identisch.
     skript = re.sub(r"<(?=[/\w!])", lambda _m: "\\x3c", skript)
-    # Zeitstempel als Kommentar: jedes Starten ist ein neues Element, damit das Skript erneut läuft
-    # <link> filtert Streamlit heraus -> Stylesheet von driver.js per Skript laden
-    css = (f"if (!document.querySelector('link[href=\"{_DRIVER_CSS}\"]')) {{ const l = document.createElement('link');"
-           f" l.rel = 'stylesheet'; l.href = '{_DRIVER_CSS}'; document.head.appendChild(l); }}")
-    st.html(f"{_STIL}<script>/* {start} */\n{css}\n{skript}</script>", unsafe_allow_javascript=True, width="content")
+    modus = "window.TOUR_AUTO = " + ("true" if auto else "false") + ";"  # kein const: Skript läuft ggf. mehrfach
+    return f"{_STIL}<script>/* {kennung} */\n{_CSS_LADEN}\n{modus}\n{skript}</script>"
+
+
+def einfuehrung_ausfuehren() -> None:
+    """Am Ende des Skripts aufrufen (alle Elemente sind dann gezeichnet).
+
+    - Automatischer Start: wird bei jedem Durchlauf mit gleichem Inhalt gezeichnet (bleibt so im Browser
+      bestehen und läuft nicht ständig neu). Ob die Tour startet, entscheidet der Browser selbst – nur wenn
+      sie dort noch nie lief (Merker im localStorage, siehe einfuehrung.js).
+    - Knopf: direkt nach dem Klick ein neues Element (Zeitstempel) -> Tour startet immer.
+    """
+    st.html(_tour_html(True, "auto"), unsafe_allow_javascript=True, width="content")
+    start = st.session_state.pop("einfuehrung_jetzt", None)
+    if start:
+        st.html(_tour_html(False, str(start)), unsafe_allow_javascript=True, width="content")
