@@ -18,7 +18,8 @@ python -m venv venv
 pip install -r requirements.txt
 # .env anlegen mit: OPENROUTER_API_KEY=sk-or-...
 streamlit run App.py
-python test_logik.py   # Tests ohne API-Aufruf
+pip install -r requirements-dev.txt
+python -m pytest       # alle Tests, ohne API/Drive/Secrets (ca. 10 s)
 ```
 
 ## Aufbau
@@ -42,7 +43,7 @@ python test_logik.py   # Tests ohne API-Aufruf
 | `storage.py` | Ein gemeinsamer Ordner für alle Benutzer. Mit `[google_drive]`: Drive-Ordner `belege/`, `analysen/` (jede Analyse) + `feedback/` (eine JSON-Datei pro Prüfung). Dazu `nachfragen/` und `entscheidungen/` (ältere Versionen, nur gelesen), `kategorien/` (alles nur anhängen) und lesbare Kategorie-Docs in `Anlage KI Assistent/<Kategorie>/`. Sonst lokal `data/` (bzw. `BELEG_DATENORDNER`): `feedback.jsonl`, `nachfragen.jsonl`, `belege/`, Rechte 0700/0600 |
 | `drive_token_holen.py` | Einmalig lokal: Refresh-Token für den Drive-Zugriff erzeugen und Ordnerzugriff prüfen |
 | `assets/` | RE-ALIS-Logo und -Symbol (SVG, von re-alis.com, Farben direkt eingetragen). Design in `.streamlit/config.toml`: helles Theme, Marken-Orange (abgedunkelt auf `#C25100` für lesbare Buttons), Source Sans 3 |
-| `test_logik.py` | Assert-Tests für Parsing, Vergleich, JSON-Extraktion, Pydantic, Ableitungen und Prüfungen (inkl. echter Fälle Domhof/Aral) |
+| `tests/` | `pytest`-Tests: `test_logik.py` (Parsing, Vergleich, JSON-Extraktion, Pydantic, Ableitungen, Prüfungen inkl. echter Fälle Domhof/Aral), `test_pipeline.py`, `test_storage_lokal.py`, `test_kategorien_lernen.py`, `test_einfuehrung.py`, `test_ui_*.py` (Oberfläche mit `AppTest` und vorgetäuschter Ablage aus `attrappe.py`); `browser/` manuelle Browser-Tests der Einführung. Läuft auch per GitHub Actions bei jedem Push |
 
 **Ablauf:** Upload → `dateien_zu_bildern` → `beleg_lesen` (doppelt lesen, ggf. Schiedsrichter; Modell liest nur
 ab) → `BelegAnalyse` (Code rechnet Summen/Trinkgeld) → `pruefen` + `nachfragen_gruende` → sofort

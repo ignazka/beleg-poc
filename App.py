@@ -708,8 +708,17 @@ _MAX_LERNFAELLE = 60
 def _lernfaelle(eintraege: list[dict]) -> tuple[list[dict], list[dict]]:
     """Bewertungen, aus denen sich etwas lernen lässt: korrigiert, kommentiert oder nachgefragt.
     -> (nummerierte Fälle fürs Modell, zugehörige Einträge)."""
+    # Nachfragegründe: aus der Prüfung selbst oder – bei älteren Prüfungen ohne dieses Feld – aus der Analyse
+    try:
+        gruende_je_beleg = {b["sha"]: b["gruende"] for b in _alle_belege()}
+    except Exception:
+        gruende_je_beleg = {}
+
+    def gruende(e):
+        return e.get("nachfrage_gruende") or gruende_je_beleg.get(e.get("datei_sha256")) or []
+
     quellen = [e for e in eintraege
-               if not _fehlerfrei(e) or (e.get("kommentar") or "").strip() or e.get("nachfrage_gruende")]
+               if not _fehlerfrei(e) or (e.get("kommentar") or "").strip() or gruende(e)]
     quellen = sorted(quellen, key=lambda e: e.get("zeitpunkt") or "", reverse=True)[:_MAX_LERNFAELLE]
     faelle = []
     for nr, e in enumerate(quellen, start=1):
@@ -729,7 +738,7 @@ def _lernfaelle(eintraege: list[dict]) -> tuple[list[dict], list[dict]]:
                                    "richtig": anzeige(felder[key]["korrekt"]) or "–"}
                                   for key, label, _t in FEEDBACK_FELDER
                                   if key in felder and not felder[key]["richtig"]],
-            "nachfragegruende_ki": e.get("nachfrage_gruende") or [],
+            "nachfragegruende_ki": gruende(e),
             "kommentar_mensch": (e.get("kommentar") or "").strip(),
             "quelle": _QUELLE.get(e.get("quelle"), _QUELLE_ALT),
         })
@@ -871,7 +880,18 @@ def _belegbilder(eintrag: dict, bereich: str) -> None:
                     f"{bereich}_{eintrag.get('datei_sha256') or 'ohne_hash'}")
 
 
+_LAUF_CACHE: dict = {}  # gilt nur für einen Durchlauf – App.py wird bei jeder Eingabe neu ausgeführt
+
+
 def _alle_belege() -> list[dict]:
+    """Alle Belege zusammengeführt – einmal pro Durchlauf berechnet (Tab-Beschriftung, Tab „Belege“,
+    Auswertung und „Aus Korrekturen lernen“ brauchen dieselben Daten)."""
+    if "belege" not in _LAUF_CACHE:
+        _LAUF_CACHE["belege"] = _belege_zusammenfuehren()
+    return _LAUF_CACHE["belege"]
+
+
+def _belege_zusammenfuehren() -> list[dict]:
     """Analysen (neu), Nachfragen (alt), Bewertungen und alte Entscheidungen pro Datei-Hash zusammenführen.
 
     Ein Beleg: {sha, analyse_eintrag (jüngste Analyse/Nachfrage), bewertung (jüngste), entscheidung (alt),

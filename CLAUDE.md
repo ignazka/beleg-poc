@@ -101,9 +101,19 @@ Einträge müssen lesbar bleiben.
   verschoben oder entfernt (Tabs, Knöpfe, `key=`-Namen, Texte), die Schritte in `assets/einfuehrung.js`
   anpassen bzw. ergänzen und die Tour einmal durchklicken (alle Schritte treffen das richtige Element,
   keine JS-Fehler). Bei größeren neuen Funktionen dem Nutzer einen passenden Tour-Schritt vorschlagen.
-- **Tests:** `python test_logik.py` (ohne API). UI-Tests mit `streamlit.testing.v1.AppTest` und
-  vorgetäuschter Ablage (`storage.*` ersetzen, dann `App.py` per `exec` laden). **Nie in die echte Ablage
-  schreiben**; echte Drive-Daten lesen ist in Ordnung. Echte Modellaufrufe sparsam.
+  `tests/test_einfuehrung.py` schlägt an, wenn ein Tour-Ziel (`.st-key-…`, Knopftext) nicht mehr existiert.
+  Durchklicken im Browser: `tests/browser/tour_durchklicken.mjs` (Anleitung im Dateikopf).
+- **Tests:** `python -m pytest` (ca. 10 s, ohne API, ohne Drive, ohne Secrets; `pip install -r
+  requirements-dev.txt`). Laufen auch per GitHub Actions bei jedem Push (`.github/workflows/tests.yml`) –
+  Streamlit Cloud deployt trotzdem sofort, ein rotes Kreuz heißt also „schnell beheben“.
+  - `tests/test_logik.py` Rechnen/Prüfen/Parsen, `test_pipeline.py` doppelt lesen + Schiedsrichter,
+    `test_storage_lokal.py` lokale Ablage, `test_kategorien_lernen.py`, `test_einfuehrung.py`,
+    `test_ui_*.py` Oberfläche mit `AppTest`.
+  - UI-Tests über `tests/attrappe.py`: `A.app(analysen=[…], feedback=[…], ki={…})` startet die App mit
+    vorgetäuschter Ablage/KI; `storage._drive` ist dort gesperrt. Neue `storage`-Funktionen, die die App
+    nutzt, **dort ebenfalls ersetzen**.
+  - Neue Funktionen bekommen Tests (mindestens ein UI-Test für neue Abläufe). **Nie in die echte Ablage
+    schreiben**; echte Drive-Daten lesen ist in Ordnung. Echte Modellaufrufe sparsam.
 - Der Nutzer entscheidet Design-Fragen gern selbst und ändert sie auch wieder – bei echten Alternativen
   kurz fragen, sonst umsetzen und per Screenshot zeigen.
 

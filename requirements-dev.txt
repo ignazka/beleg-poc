@@ -1,0 +1,2 @@
+# Nur für Entwicklung/Tests (nicht für Streamlit Cloud):  pip install -r requirements.txt -r requirements-dev.txt
+pytest==8.4.2

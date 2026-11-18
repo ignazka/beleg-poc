@@ -1,4 +1,12 @@
-"""Schnelltests ohne API-Aufruf:  python test_logik.py"""
+"""Schnelltests der Rechen-, Prüf- und Parse-Logik ohne API-Aufruf.
+
+Läuft mit allen anderen Tests über  python -m pytest  oder allein über  python tests/test_logik.py.
+Die Prüfungen stehen bewusst direkt im Modul (werden beim Import ausgeführt).
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from beleg_schema import BelegAnalyse, parse_betrag, parse_datum, parse_saetze, werte_gleich
 from extraction import _json_extrahieren
@@ -319,4 +327,11 @@ api = termin_aus_api({"summary": "Essen", "start": {"dateTime": "2026-09-04T16:3
 assert api.start.hour == 18 and api.teilnehmer == ["Anna"]  # UTC -> Berlin (Sommerzeit), ohne Räume/Absagen
 assert termin_aus_api({"start": {"date": "2026-10-07"}, "end": {"date": "2026-10-10"}}).ganztags
 
-print("Alle Logik-Tests bestanden.")
+
+
+def test_logik():
+    """Für pytest: Die Prüfungen oben liefen schon beim Import – kommt pytest hier an, ist alles grün."""
+
+
+if __name__ == "__main__":
+    print("Alle Logik-Tests bestanden.")

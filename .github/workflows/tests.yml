@@ -1,0 +1,20 @@
+# Tests bei jedem Push und Pull Request. Streamlit Cloud deployt unabhängig davon sofort –
+# ein rotes Kreuz hier heißt: Der gerade ausgerollte Stand hat einen Fehler, bitte schnell beheben.
+# Die Tests brauchen keine Secrets: Ablage und KI sind vorgetäuscht (tests/attrappe.py).
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pytest

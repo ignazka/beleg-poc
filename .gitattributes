@@ -1,0 +1,5 @@
+# Einheitlich LF im Repo und in der Arbeitskopie (beendet die LF/CRLF-Warnungen unter Windows)
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.pdf binary
