@@ -49,7 +49,16 @@ def test_aus_korrekturen_lernen_bis_kategorie():
     A.keine_fehler(at)
     assert "FÄLLE" in A.ANFRAGEN[0] and "Zimmerbuchung, Betrag falsch" in A.ANFRAGEN[0]
     assert [m.value for m in at.markdown if m.value.startswith("> ")] == ["> Zimmer-Positionen bedeuten Übernachtung."]
-    assert any("Bewertung widerspricht dem Kommentar" in w.value for w in at.warning)
+    texte = [m.value for m in at.markdown]
+    assert any("Regel fehlte · 1" in t and "Bewertung widersprüchlich · 1" in t for t in texte)  # kompakt
+    assert any(t.startswith("**Bewertung widersprüchlich**") for t in texte)                    # eigene Gruppe
+    assert any("Kommentar widerspricht" in t for t in texte)  # Fall ohne Vorschlag als kleine Karte
+
+    # Fall ohne Vorschlag: Beleg im Tab „Belege“ vorauswählen
+    A.knopf(at, "Im Tab „Belege“ öffnen").click().run()
+    A.keine_fehler(at)
+    assert at.segmented_control[0].value == "alle" and at.selectbox(key="beleg_wahl").value == "n1"  # Fall 2
+    assert any("Im Tab „Belege“ ausgewählt" in c.value for c in at.caption)
     assert any("Rückfragen an die Buchhaltung" in w.value for w in at.warning)
 
     A.knopf(at, "In Kategorie übernehmen").click().run()

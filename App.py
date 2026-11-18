@@ -808,6 +808,7 @@ def _aus_korrekturen_lernen(eintraege: list[dict]) -> None:
             st.session_state["lern_ergebnis"] = {
                 **lern_antwort_pruefen(antwort, KAT_STAND, len(faelle)),
                 "dateien": [e.get("dateiname") or "?" for e in quellen],
+                "shas": [e.get("datei_sha256") for e in quellen],
                 "erstellt": datetime.now().isoformat(timespec="seconds"),
                 "anzahl": len(faelle),
             }
@@ -818,59 +819,116 @@ def _aus_korrekturen_lernen(eintraege: list[dict]) -> None:
         _lern_ergebnis_zeigen(erg)
 
 
+# Reihenfolge, Farbe und Erklärung der Ursachen in der Anzeige
+_URSACHE_ANZEIGE = {
+    "regel": ("orange", "Der KI fehlte Wissen – die Vorschläge ergänzen die Kategorie-Beschreibung."),
+    "nachfrage_zu_streng": ("blue", "Die KI hat nachgefragt, obwohl alles stimmte – die Vorschläge präzisieren, "
+                                    "wann nicht nachgefragt werden muss."),
+    "bewertung_widerspruechlich": ("red", "Kommentar und Bewertung passen nicht zusammen – im Tab „Belege“ "
+                                          "(Ansicht „Mit Kommentar“) öffnen und über „Korrigieren“ richtigstellen."),
+    "lesefehler": ("gray", "Zahl oder Text falsch abgelesen – lässt sich nicht über Regeln beheben."),
+    "unklar": ("violet", "Die KI konnte keine eindeutige Ursache erkennen."),
+}
+
+
+def _vorschlag_ursache(v: dict, ursache_je_fall: dict[int, str]) -> str:
+    """Ein Vorschlag gehört zur häufigsten Ursache seiner Fälle (ohne Fälle: nach dem Feld)."""
+    zaehler: dict[str, int] = {}
+    for nr in v["faelle"]:
+        u = ursache_je_fall.get(nr)
+        if u in ("regel", "nachfrage_zu_streng"):
+            zaehler[u] = zaehler.get(u, 0) + 1
+    if zaehler:
+        return max(zaehler, key=lambda u: (zaehler[u], u == "regel"))
+    return "nachfrage_zu_streng" if v["feld"] == "nachfragen_wenn" else "regel"
+
+
+def _lernfall_karte(f: dict, dateiname: str, sha: str | None, ursache: str) -> None:
+    """Kleine Karte für einen Fall ohne Vorschlag: was schiefging + Beleg im Tab „Belege“ vorauswählen."""
+    with st.container(border=True, key=f"lernfall_{ursache}_{f['nr']}"):
+        text, knopf = st.columns([5, 2], vertical_alignment="center")
+        text.markdown(f"**{dateiname}**  \n{f['kurz'] or '–'}")
+        geoeffnet = st.session_state.setdefault("lern_geoeffnet", set())
+        if not sha:
+            return
+        if sha in geoeffnet:
+            knopf.caption(":material/check: Im Tab „Belege“ ausgewählt")
+        elif knopf.button("Im Tab „Belege“ öffnen", icon=":material/arrow_forward:", type="tertiary",
+                          key=f"lern_beleg_{ursache}_{f['nr']}"):
+            st.session_state["beleg_wahl_naechste"] = sha
+            st.session_state["belege_filter_naechste"] = "alle"  # Filter so, dass der Beleg sicher drin ist
+            geoeffnet.add(sha)
+            st.toast("Beleg im Tab „Belege“ ausgewählt – dort ansehen und ggf. korrigieren.",
+                     icon=":material/arrow_forward:")
+            st.rerun()
+
+
 def _lern_ergebnis_zeigen(erg: dict) -> None:
     dateien = erg["dateien"]
 
     def datei(nr):
         return dateien[nr - 1] if 1 <= nr <= len(dateien) else f"Fall {nr}"
 
-    st.caption(f"Erstellt am {zeitpunkt_de(erg['erstellt'])} aus {erg['anzahl']} Fällen.")
-    zaehler = {u: sum(1 for f in erg["faelle"] if f["ursache"] == u) for u in URSACHEN}
-    sichtbar = [(u, n) for u, n in zaehler.items() if n]
-    if sichtbar:
-        for spalte, (u, n) in zip(st.columns(len(sichtbar)), sichtbar):
-            spalte.metric(URSACHEN[u], n)
+    def sha(nr):
+        shas = erg.get("shas") or []  # ältere Ergebnisse dieser Sitzung haben noch keine Hashes
+        return shas[nr - 1] if 1 <= nr <= len(shas) else None
 
-    widerspruch = [f for f in erg["faelle"] if f["ursache"] == "bewertung_widerspruechlich"]
-    if widerspruch:
-        st.warning(
-            "**Bewertung widerspricht dem Kommentar** – bitte im Tab „Belege“ (Ansicht „Mit Kommentar“) öffnen "
-            "und über „Korrigieren“ richtigstellen:\n\n"
-            + "\n".join(f"- {datei(f['nr'])}: {f['kurz']}" for f in widerspruch),
-            icon=":material/rule:",
-        )
+    ursache_je_fall = {f["nr"]: f["ursache"] for f in erg["faelle"]}
+    faelle_je_ursache = {u: [f for f in erg["faelle"] if f["ursache"] == u] for u in URSACHEN}
+    vorschlaege_je_ursache: dict[str, list[tuple[int, dict]]] = {u: [] for u in URSACHEN}
+    for i, v in enumerate(erg["vorschlaege"]):
+        vorschlaege_je_ursache[_vorschlag_ursache(v, ursache_je_fall)].append((i, v))
 
-    vorschlaege = erg["vorschlaege"]
-    if not vorschlaege:
-        st.info("Keine Vorschläge für die Kategorie-Beschreibungen – die Fälle zeigen (noch) kein Muster, "
-                "das sich mit einer Regel beheben lässt.")
+    # Kompakte Übersicht: eine Zeile mit farbigen Zählern
+    zaehler = "  ".join(f":{_URSACHE_ANZEIGE[u][0]}-badge[{URSACHEN[u]} · {len(faelle_je_ursache[u])}]"
+                        for u in _URSACHE_ANZEIGE if faelle_je_ursache[u])
+    st.markdown(f"{zaehler}  \n:small[:gray[Erstellt am {zeitpunkt_de(erg['erstellt'])} aus {erg['anzahl']} "
+                f"Fällen · {len(erg['vorschlaege'])} {'Vorschlag' if len(erg['vorschlaege']) == 1 else 'Vorschläge'}]]")
+
     darf = darf_kategorien_bearbeiten()
     uebernommen = st.session_state.setdefault("lern_uebernommen", set())
     sicherheit = {"hoch": ("Sicherheit hoch", "green"), "mittel": ("Sicherheit mittel", "orange"),
                   "niedrig": ("Einzelfall", "gray")}
-    for i, v in enumerate(vorschlaege):
-        with st.container(border=True):
-            text, farbe = sicherheit[v["sicherheit"]]
-            st.markdown(f"**{_kategorie_label(v['kategorie'])}** · {KAT_FELD_LABEL[v['feld']]}  "
-                        f":{farbe}-badge[{text}]")
-            st.markdown(f"> {v['text']}")
-            st.caption(v["begruendung"] + (" · Fälle: " + ", ".join(datei(n) for n in v["faelle"])
-                                           if v["faelle"] else ""))
-            if i in uebernommen:
-                st.caption(":material/check: Im Tab „Kategorien“ vorbereitet – dort prüfen, testen, speichern.")
-            elif darf and st.button("In Kategorie übernehmen", icon=":material/playlist_add:", key=f"lern_ueb_{i}"):
-                st.session_state.setdefault("kategorie_vorschlaege_naechste", []).append(
-                    {"key": v["kategorie"], "feld": v["feld"], "text": v["text"]})
-                uebernommen.add(i)
-                st.toast("Vorschlag im Tab „Kategorien“ vorbereitet – dort prüfen, testen und speichern.",
-                         icon=":material/playlist_add:")
-                st.rerun()
+    for u, (farbe, erklaerung) in _URSACHE_ANZEIGE.items():
+        faelle, vorschlaege = faelle_je_ursache[u], vorschlaege_je_ursache[u]
+        if not faelle and not vorschlaege:
+            continue
+        anzahl = f"{len(faelle)} {'Fall' if len(faelle) == 1 else 'Fälle'}"
+        st.markdown(f"**{URSACHEN[u]}** :{farbe}-badge[{anzahl}]  \n:small[:gray[{erklaerung}]]")
+        for i, v in vorschlaege:
+            with st.container(border=True):
+                text, s_farbe = sicherheit[v["sicherheit"]]
+                st.markdown(f"**{_kategorie_label(v['kategorie'])}** · {KAT_FELD_LABEL[v['feld']]}  "
+                            f":{s_farbe}-badge[{text}]")
+                st.markdown(f"> {v['text']}")
+                st.caption(v["begruendung"] + (" · Fälle: " + ", ".join(datei(n) for n in v["faelle"])
+                                               if v["faelle"] else ""))
+                if i in uebernommen:
+                    st.caption(":material/check: Im Tab „Kategorien“ vorbereitet – dort prüfen, testen, speichern.")
+                elif darf and st.button("In Kategorie übernehmen", icon=":material/playlist_add:",
+                                        key=f"lern_ueb_{i}"):
+                    st.session_state.setdefault("kategorie_vorschlaege_naechste", []).append(
+                        {"key": v["kategorie"], "feld": v["feld"], "text": v["text"]})
+                    uebernommen.add(i)
+                    st.toast("Vorschlag im Tab „Kategorien“ vorbereitet – dort prüfen, testen und speichern.",
+                             icon=":material/playlist_add:")
+                    st.rerun()
+        # Fälle ohne Vorschlag direkt nennen (bei Lesefehlern, Widersprüchen usw. sind das alle)
+        abgedeckt = {n for _i, v in vorschlaege for n in v["faelle"]}
+        offen = [f for f in faelle if f["nr"] not in abgedeckt]
+        if offen and vorschlaege:
+            st.caption("Ohne Vorschlag:")
+        for f in offen:
+            _lernfall_karte(f, datei(f["nr"]), sha(f["nr"]), u)
+        if not offen and u in ("regel", "nachfrage_zu_streng") and not vorschlaege:
+            st.caption("Kein Vorschlag – die Fälle zeigen (noch) kein Muster.")
+
+    if not erg["vorschlaege"]:
+        st.info("Keine Vorschläge für die Kategorie-Beschreibungen – die Fälle zeigen (noch) kein Muster, "
+                "das sich mit einer Regel beheben lässt.")
     if erg["rueckfragen"]:
         st.warning("**Rückfragen an die Buchhaltung**\n\n" + "\n".join(f"- {r}" for r in erg["rueckfragen"]),
                    icon=":material/help:")
-    with st.expander("Alle Fälle mit Einordnung"):
-        st.dataframe([{"Nr": f["nr"], "Datei": datei(f["nr"]), "Ursache": URSACHEN[f["ursache"]],
-                       "Was schiefging": f["kurz"]} for f in erg["faelle"]], hide_index=True, width="stretch")
 
 
 # ---------------------------------------------------------------------------
@@ -1022,6 +1080,9 @@ def zeige_belege():
         "alle": ("Alle", lambda b: True),
     }
     anzahl = {k: sum(1 for b in belege if f(b)) for k, (_l, f) in filter_.items()}
+    naechster_filter = ss.pop("belege_filter_naechste", None)  # z. B. aus „Aus Korrekturen lernen“
+    if naechster_filter in filter_:
+        ss["belege_filter"] = naechster_filter
     if ss.get("belege_filter") is None:  # Start: dort, wo es etwas zu tun gibt
         ss["belege_filter"] = next((k for k in ("offen", "ungeprueft") if anzahl[k]), "alle")
     wahl = st.segmented_control("Anzeigen", list(filter_), format_func=lambda k: f"{filter_[k][0]} ({anzahl[k]})",
@@ -1661,6 +1722,11 @@ st.markdown(
     '[class*="st-key-laufknopf_"] button:disabled [data-testid="stMarkdownContainer"] {position: absolute; width: 1px;'
     ' height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;}'
     '[class*="st-key-laufknopf_"] button {min-width: 12rem;}'
+    # kleinere Karten für Lern-Fälle ohne Vorschlag; Knopf als Link in der Akzentfarbe
+    '[class*="st-key-lernfall_"] {padding: .55rem .9rem !important; gap: .25rem;}'
+    '[class*="st-key-lernfall_"] p {font-size: .92rem;}'
+    '[class*="st-key-lernfall_"] button:not(:disabled), [class*="st-key-lernfall_"] button:not(:disabled) p'
+    ' {color: #C25100; font-weight: 600;}'
     # Ladebalken oben über die ganze Breite, solange Streamlit rechnet (Filter, Blättern, Speichern, …)
     "@keyframes lade-balken {from {background-position: -40% 0;} to {background-position: 140% 0;}}"
     'body:has([data-testid="stStatusWidgetRunningIcon"], [data-testid="stStatusWidgetRunningManIcon"])::before'
