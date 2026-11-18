@@ -21,7 +21,7 @@ Datei: `extraction.py` (`dateien_zu_bildern`)
 - Erlaubt: JPG, PNG, PDF. Bei mehreren Dateien fragt die App, wie sie gelesen werden sollen:
   - **Stapel** (Standard): Jede Datei ist ein eigener Beleg. Bis zu 30 Belege, 3 gleichzeitig, jeder mit
     dem vollen Ablauf. Ergebnis: Übersicht (stimmig / Nachfrage / Fehler, farbig), CSV-Download,
-    jeder Beleg im Detail ansehbar und bewertbar. **Jeder** analysierte Beleg wird abgelegt (Original +
+    die Analyse jedes Belegs im Detail ansehbar. **Jeder** analysierte Beleg wird abgelegt (Original +
     Ergebnis in `analysen/`) und erscheint im Tab „Belege“.
   - **Ein Beleg**: Alle Dateien gehören zusammen, z. B. Rechnung + EC-Beleg oder mehrere Fotos einer
     langen Rechnung.
@@ -151,8 +151,9 @@ der beiden ersten Lesungen zustimmt. Danach laufen alle Prüfungen erneut.
 
 Datei: `checks.py` (`nachfragen_gruende`)
 
-Der Beleg wird **sofort** im Drive-Ordner `nachfragen/` abgelegt (Original in `belege/`), auch ohne
-Feedback. Gründe:
+Jeder Beleg wird sofort abgelegt (`analysen/`, Original in `belege/`); die Nachfragegründe stehen mit
+dabei, im Tab „Belege“ erscheint er unter „Nachfragen offen“. (Ältere Nachfragen liegen in `nachfragen/`.)
+Gründe:
 
 - unlesbar
 - Belegart unsicher (mit Begründung der KI) oder keiner Kategorie zuzuordnen
@@ -235,7 +236,7 @@ Dateien: `kategorien.py`, `prompts.py` (`system_prompt`, `prompt_version`), `App
   anderen Kategorie überschneidet, stellt er als **Rückfrage an die Buchhaltung**, statt zu raten. Sein
   Ergebnis ist nur ein Vorschlag. Erst „Speichern“ übernimmt ihn.
 - **Status**: „Entwurf“ wird gespeichert, aber noch nicht verwendet. „Aktiv“ fließt ab sofort in jede
-  Analyse ein. Entwürfe erscheinen in den Auswahllisten der Nachfragen und des Feedbacks als „(Entwurf)“,
+  Analyse ein. Entwürfe erscheinen in der Belegart-Auswahl im Tab „Belege“ als „(Entwurf)“,
   damit eine neu angelegte Kategorie sofort auswählbar ist – der KI-Prompt und die Prüfung ihrer Antworten
   nutzen aber nur aktive Kategorien.
 - **Jede Änderung ist eine neue Version** (`kategorien/`) mit Person und Zeitpunkt. Löschen ist ebenfalls
@@ -250,7 +251,7 @@ Kategorien mit allen Regeln stehen bei jeder Analyse in den Anweisungen an die K
 bekommt einen Fingerabdruck des Kategorie-Wissens (z. B. `2026-11-17.5+kda009b`). So zeigt die
 Auswertung, ob eine geänderte Beschreibung die Trefferquote verbessert oder verschlechtert. Ein echtes
 Nachtrainieren des Modells lohnt sich erst mit einigen hundert geprüften Belegen. Diese sammeln
-Feedback und Korrekturen gerade.
+die Prüfungen im Tab „Belege“ gerade.
 
 ### Probelauf vor dem Speichern („Hilft meine Änderung?“)
 
@@ -272,12 +273,14 @@ erkennen zählt mehr als wenige Rückfragen) und eine Tabelle pro Beleg: grün =
 grau = Datei nicht lesbar.
 Gespeichert wird beim Testlauf **nichts**. Höchstens 15 Belege pro Lauf, 4 parallel.
 
-## 10. Feedback und Messung
+## 10. Prüfung und Messung
 
 Datei: `App.py`
 
-Nach jeder Analyse kann ein Mensch jedes Feld bestätigen oder korrigieren. Gespeichert werden das
-Ergebnis, alle Lesungen (welches Modell was gelesen hat), die Umdeutungen und die Korrekturen.
+Geprüft wird **nur im Tab „Belege“** (Abschnitt 8). Der Tab „Belege hochladen“ zeigt nur das Ergebnis der
+Analyse (bei Stapeln die Übersicht, Details je Beleg zum Ansehen) und verweist zum Prüfen auf „Belege“.
+Früher gab es dort zusätzlich ein Feedback-Formular; dessen Einträge zählen weiter (Quelle „Feedback direkt
+nach der Analyse (frühere Version)“).
 
 Die **Belegart wird ausdrücklich abgefragt**: „Stimmt die Belegart „…“? Ja / Nein“, nichts ist
 vorausgewählt; bei „Nein“ wählt man die richtige. Ohne Antwort lässt sich nicht speichern. (Vorher war die

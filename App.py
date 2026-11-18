@@ -52,7 +52,6 @@ from storage import (
     kategorien_laden,
     feedback_speichern,
     nachfragen_laden,
-    schon_bewertet,
 )
 
 _ASSETS = Path(__file__).parent / "assets"
@@ -225,9 +224,9 @@ def zeige_stapel(ergebnisse: list[dict]):
     m2.metric("Stimmig", stimmig)
     m3.metric("Zur Nachfrage", nachfrage)
     m4.metric("Fehler", fehler)
-    if nachfrage:
-        st.info(f"{nachfrage} Beleg(e) mit Nachfrage – im Tab „Belege“ unter „Nachfragen offen“ prüfen "
-                "und korrigieren. Alle anderen Belege liegen dort ebenfalls zum Durchsehen.", icon=":material/help:")
+    st.info("**Prüfen und korrigieren im Tab „Belege“**" + (
+        f" – {nachfrage} Beleg(e) mit Nachfrage stehen dort unter „Nachfragen offen“, alle anderen unter „Ungeprüft“."
+        if nachfrage else " – die Belege stehen dort unter „Ungeprüft“."), icon=":material/arrow_forward:")
     fehlgeschlagen = [e["dateiname"] for e in ergebnisse if (e.get("ablage_status") or "").startswith("Ablegen")]
     if fehlgeschlagen:
         st.warning("Nicht abgelegt (bitte erneut hochladen): " + ", ".join(fehlgeschlagen))
@@ -258,7 +257,7 @@ def zeige_stapel(ergebnisse: list[dict]):
         return
     st.divider()
     gewaehlt = st.selectbox(
-        "Beleg im Detail ansehen und bewerten",
+        "Analyse eines Belegs im Detail ansehen",
         analysierbar,
         format_func=lambda e: f"{e['dateiname']} – {_status_text(e)}",
         key="stapel_detail",
@@ -428,8 +427,7 @@ def zeige_ergebnis(erg):
 
     # 1. Gesamtergebnis zuerst – das Wichtigste oben
     if gruende:
-        st.error("**Nachfrage nötig.** Der Beleg liegt im Tab „Belege“ unter „Nachfragen offen“ – dort "
-                 "prüfen und korrigieren (oder gleich unten).\n\n" + "\n".join(f"- {g}" for g in gruende),
+        st.error("**Nachfrage nötig.** Die KI ist sich nicht sicher:\n\n" + "\n".join(f"- {g}" for g in gruende),
                  icon=":material/help:")
     else:
         st.success("**Alles stimmig.** Alle Prüfungen bestanden, keine Nachfrage nötig.",
@@ -506,8 +504,9 @@ def zeige_ergebnis(erg):
                 st.code(l.raw or l.fehler or "", language="json")
             st.json(erg["usage"])
 
-    st.divider()
-    zeige_feedback(erg)
+    if not (erg.get("ablage_status") or "").startswith("Ablegen fehlgeschlagen"):
+        st.info("**Prüfen und korrigieren im Tab „Belege“** – der Beleg steht dort unter "
+                + ("„Nachfragen offen“." if gruende else "„Ungeprüft“."), icon=":material/arrow_forward:")
 
 
 # ---------------------------------------------------------------------------
@@ -566,99 +565,6 @@ def _belegart_frage(ki_kat: str, key: str, richtig: bool | None = None, korrekt:
     return None
 
 
-def zeige_feedback(erg):
-    analyse = erg["analyse"]
-    st.subheader("Feedback: Was hat die KI richtig erkannt?")
-    st.caption("Hilft uns zu messen, wie gut die Erkennung ist. Bitte nur falsche Werte korrigieren.")
-
-    if erg["sha"] in st.session_state.get("gespeichert_shas", set()):
-        st.success("Feedback gespeichert – danke! Du kannst den nächsten Beleg hochladen.")
-        return
-    try:
-        bereits_bewertet = schon_bewertet(erg["sha"])
-    except Exception:  # Ablage kurz nicht erreichbar -> Hinweis weglassen, Speichern meldet den Fehler
-        bereits_bewertet = False
-    if bereits_bewertet:
-        st.info("Dieser Beleg wurde schon einmal bewertet. Ein neues Feedback wird zusätzlich gespeichert.")
-
-    st.caption(
-        "Korrigiere nur die Werte, die falsch sind. Leeres Feld = steht nicht auf dem Beleg. "
-        "Beträge wie 1.234,50 – Datum als TT.MM.JJJJ."
-    )
-
-    kat_korrekt = _belegart_frage(analyse.kategorie, f"fb_{erg['sha']}")
-    with st.form(key=f"feedback_{erg['sha']}"):
-        korrekturen = _felder_eingabe(analyse, f"fb_{erg['sha']}")
-
-        hinweise_ok = st.radio(
-            "Waren die Hinweise der KI zutreffend?",
-            ["Ja", "Teilweise", "Nein", "Keine Hinweise ausgegeben"],
-            horizontal=True,
-            index=None,
-        )
-        kommentar = st.text_area(
-            "Kommentar (optional)", placeholder="z. B. Trinkgeld stand handschriftlich auf dem Beleg"
-        )
-        bearbeiter = st.text_input(
-            "Dein Kürzel", value=st.session_state.get("bearbeiter") or aktueller_benutzer() or ""
-        )
-        abgeschickt = st.form_submit_button("Feedback speichern", type="primary")
-
-    if not abgeschickt:
-        return
-    if kat_korrekt is None:
-        st.error("Bitte oben beantworten, ob die Belegart stimmt (und ggf. die richtige wählen).")
-        return
-
-    felder, ungueltig = _felder_auswerten(analyse, korrekturen)
-    if ungueltig:
-        st.error("Bitte prüfe diese Eingaben, sie konnten nicht gelesen werden: " + ", ".join(ungueltig))
-        return
-
-    st.session_state["bearbeiter"] = bearbeiter
-    try:
-        pfade = _belege_speichern(erg["dateien"])
-        _feedback_ablegen(erg, analyse, kat_korrekt, felder, hinweise_ok, kommentar, bearbeiter, pfade)
-    except Exception as e:  # z. B. Drive nicht erreichbar, Ordner nicht beschreibbar
-        st.error(f"Speichern fehlgeschlagen – bitte erneut versuchen: {e}")
-        return
-    st.session_state.setdefault("gespeichert_shas", set()).add(erg["sha"])
-    st.rerun()
-
-
-def _feedback_ablegen(erg, analyse, kat_korrekt, felder, hinweise_ok, kommentar, bearbeiter, pfade):
-    feedback_speichern({
-        "datei_sha256": erg["sha"],
-        "dateiname": erg["dateiname"],
-        "beleg_pfad": pfade[0],
-        "beleg_pfade": pfade,
-        "seiten": erg["seiten_gesamt"],
-        "modell": erg["modell"],
-        "schiedsrichter": erg.get("schiedsrichter", False),
-        "abweichungen": {f: list(w) for f, w in erg.get("abweichungen", {}).items()},
-        "lesungen": _lesungen_protokoll(erg),
-        "kalender": erg["kalender"].als_dict() if erg.get("kalender") else None,
-        "prompt_version": erg["prompt_version"],
-        "dauer_s": erg["dauer_s"],
-        "usage": erg["usage"],
-        "rohantwort": erg["raw"],
-        "analyse": analyse.model_dump(),
-        "kategorie": {
-            "modell": analyse.kategorie,
-            "korrekt": kat_korrekt,
-            "richtig": analyse.kategorie == kat_korrekt,
-        },
-        "felder": felder,
-        "hinweise_zutreffend": hinweise_ok,
-        "kommentar": kommentar.strip() or None,
-        "bearbeiter": bearbeiter.strip() or None,
-        "benutzer_email": aktueller_benutzer(),
-        "befunde_code": erg.get("befunde", []),
-        "nachfrage_gruende": erg.get("nachfrage_gruende", []),
-    })
-
-
-
 # ---------------------------------------------------------------------------
 # Auswertung
 # ---------------------------------------------------------------------------
@@ -681,9 +587,9 @@ def _fehlerfrei(e: dict) -> bool:
 
 def zeige_auswertung():
     st.caption(
-        "Wie gut erkennt die KI eure Belege? Gezählt werden alle Belege, die ein Mensch geprüft hat – über das "
-        "Feedback nach einer Analyse oder im Tab „Belege“. Jeder Beleg zählt einmal (mit seiner jüngsten "
-        "Prüfung). Einzelne Belege ansehen und korrigieren: Tab „Belege“."
+        "Wie gut erkennt die KI eure Belege? Gezählt werden alle Belege, die ein Mensch im Tab „Belege“ geprüft "
+        "hat. Jeder Beleg zählt einmal (mit seiner jüngsten Prüfung). Einzelne Belege ansehen und korrigieren: "
+        "Tab „Belege“."
     )
     try:
         alle = feedback_laden()
@@ -701,7 +607,7 @@ def zeige_auswertung():
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Belege", len(belege), help="Alle analysierten Belege (je Beleg einmal).")
         c2.metric("Geprüft", f"{geprueft} von {len(belege)}", f"{geprueft / len(belege):.0%}", delta_color="off",
-                  delta_arrow="off", help="Von einem Menschen geprüft (Feedback oder Tab „Belege“).")
+                  delta_arrow="off", help="Von einem Menschen im Tab „Belege“ geprüft.")
         c3.metric("Nachfragen der KI", len(nf), f"{offen} offen" if offen else "alle erledigt", delta_color="off",
                   delta_arrow="off", help="Belege, bei denen die KI unsicher war oder eine Prüfung nicht aufging.")
         c4.metric("Unnötige Nachfragen", f"{unnoetig} von {len(nf_geprueft)}" if nf_geprueft else "–",
@@ -709,7 +615,7 @@ def zeige_auswertung():
                        "= Regeln zu streng.")
         st.divider()
     if not alle:
-        st.info("Noch keine geprüften Belege. Prüfe Belege nach dem Hochladen oder im Tab „Belege“.")
+        st.info("Noch keine geprüften Belege. Prüfen geht im Tab „Belege“.")
         return
     st.markdown("**Erkennungsqualität**")
 
@@ -823,7 +729,7 @@ def _lernfaelle(eintraege: list[dict]) -> tuple[list[dict], list[dict]]:
                                   if key in felder and not felder[key]["richtig"]],
             "nachfragegruende_ki": e.get("nachfrage_gruende") or [],
             "kommentar_mensch": (e.get("kommentar") or "").strip(),
-            "quelle": _QUELLE.get(e.get("quelle"), "Feedback nach der Analyse"),
+            "quelle": _QUELLE.get(e.get("quelle"), _QUELLE_ALT),
         })
     return faelle, quellen
 
@@ -844,7 +750,7 @@ def _aus_korrekturen_lernen(eintraege: list[dict]) -> None:
         st.caption(f":material/info: Erst {len(faelle)} Fälle. Mit wenigen Fällen sind Vorschläge oft "
                    "Einzelfälle – richtig aussagekräftig wird es ab etwa 20–30 Korrekturen.")
     if st.button(f"Verbesserungsvorschläge erstellen ({len(faelle)} {'Fall' if len(faelle) == 1 else 'Fälle'})", icon=":material/auto_awesome:",
-                 help=f"Modell: {MODEL_GROSS}. Ein Aufruf, dauert etwa eine halbe bis eine Minute."):
+                 help=f"Modell: {MODEL_GROSS}."):
         # auch Entwürfe zeigen: Fehler betreffen oft gerade neu angelegte Kategorien
         stand = {key: {**k, "status": "aktiv"} for key, k in kat_sichtbar(KAT_STAND).items()}
         try:
@@ -1020,6 +926,7 @@ def _vergleichstabelle(kategorie: dict, felder: dict) -> None:
 
 
 _QUELLE = {"nachfrage": "Korrektur einer Nachfrage", "pruefung": "Prüfung im Tab „Belege“"}
+_QUELLE_ALT = "Feedback direkt nach der Analyse (frühere Version)"
 
 
 def zeige_belege():
@@ -1121,7 +1028,7 @@ def _beleg_ansicht(b: dict, naechster: str | None) -> None:
                 _vergleichstabelle(f["kategorie"], f.get("felder") or {})
                 details = [f"Geprüft am {zeitpunkt_de(f.get('zeitpunkt'))} von "
                            f"{f.get('bearbeiter') or f.get('benutzer_email') or '–'}",
-                           f"Quelle: {_QUELLE.get(f.get('quelle'), 'Feedback nach der Analyse')}",
+                           f"Quelle: {_QUELLE.get(f.get('quelle'), _QUELLE_ALT)}",
                            f"Modell: `{f.get('modell') or '–'}` · Prompt-Version: `{f.get('prompt_version') or '–'}`"]
                 if f.get("korrektur_von"):
                     details.append(f"Ersetzt die Prüfung vom {zeitpunkt_de(f['korrektur_von'])}")
