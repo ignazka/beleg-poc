@@ -5,13 +5,12 @@ Die Schritte stehen in assets/einfuehrung.js. Die Tour läuft komplett im Browse
 und löst keine Eingaben aus (also auch keinen Neustart des Skripts).
 """
 
-import re
 import time
-from pathlib import Path
 
 import streamlit as st
 
-_ASSETS = Path(__file__).with_name("assets")
+from browser_skripte import skript_einbetten, skript_html
+
 _DRIVER_CSS = "https://cdn.jsdelivr.net/npm/driver.js@1.3.1/dist/driver.css"
 
 # RE-ALIS-Look für die Popups (Akzentfarbe wie in .streamlit/config.toml)
@@ -48,12 +47,8 @@ def einfuehrung_knopf() -> None:
 
 
 def _tour_html(auto: bool, kennung: str) -> str:
-    skript = (_ASSETS / "einfuehrung.js").read_text(encoding="utf-8")
-    # Streamlits HTML-Filter (DOMPurify) verwirft ein <script>, dessen Text nach Markup aussieht („<b>“ in den
-    # Erklärtexten). Deshalb jedes „<“ vor Buchstabe, „/“ oder „!“ als \x3c schreiben – in JS-Strings identisch.
-    skript = re.sub(r"<(?=[/\w!])", lambda _m: "\\x3c", skript)
     modus = "window.TOUR_AUTO = " + ("true" if auto else "false") + ";"  # kein const: Skript läuft ggf. mehrfach
-    return f"{_STIL}<script>/* {kennung} */\n{_CSS_LADEN}\n{modus}\n{skript}</script>"
+    return skript_html("einfuehrung.js", vorab=_CSS_LADEN + "\n" + modus, kennung=kennung, stil=_STIL)
 
 
 def einfuehrung_ausfuehren() -> None:
@@ -68,3 +63,8 @@ def einfuehrung_ausfuehren() -> None:
     start = st.session_state.pop("einfuehrung_jetzt", None)
     if start:
         st.html(_tour_html(False, str(start)), unsafe_allow_javascript=True, width="content")
+
+
+def belegansicht_einbetten() -> None:
+    """Große Belegansicht im Browser (assets/belegansicht.js) – gleicher Inhalt, bleibt also bestehen."""
+    skript_einbetten("belegansicht.js")

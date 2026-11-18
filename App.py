@@ -21,7 +21,7 @@ from testlauf import ausfuehren as testlauf_ausfuehren
 from testlauf import erwartete_kategorien
 from testlauf import zusammenfassung as testlauf_zusammenfassung
 from marke import APP_NAME, kopfzeile
-from einfuehrung import einfuehrung_ausfuehren, einfuehrung_knopf
+from einfuehrung import belegansicht_einbetten, einfuehrung_ausfuehren, einfuehrung_knopf
 from kategorien import ASSISTENT_PROMPT, aktueller_stand, assistent_nachricht, labels, prompt_abschnitt, wissens_hash
 from kategorien import aktiv as kat_aktiv
 from kategorien import als_dokument as kat_dokument
@@ -385,8 +385,14 @@ def _beleg_vorschau(bilder: list[bytes], titel: str, key: str) -> None:
         spalten = st.columns(min(n, _VORSCHAU_SEITEN)) if n > 1 else [st]
         for spalte, bild in zip(spalten, bilder):
             spalte.image(bild)
-        # unsichtbarer Button über dem ganzen Bild (CSS): Klick aufs Bild öffnet die große Ansicht
+        # unsichtbarer Button über dem ganzen Bild (CSS): Klick aufs Bild öffnet die große Ansicht.
+        # assets/belegansicht.js fängt den Klick im Browser ab (sofort, ohne Neuberechnung); der Streamlit-
+        # Dialog unten ist nur der Rückfall, falls das Skript fehlt.
         bild_klick = st.button("Beleg vergrößern", key=f"bildklick_{key}")
+    if n > _VORSCHAU_SEITEN:  # weitere Seiten unsichtbar mitliefern, damit die große Ansicht alle zeigt
+        with st.container(key=f"belegmehr_{key}"):
+            for bild in bilder[_VORSCHAU_SEITEN:]:
+                st.image(bild)
     if n > _VORSCHAU_SEITEN:
         st.caption(f"{n} Seiten – {n - _VORSCHAU_SEITEN} weitere in der großen Ansicht")
     elif n > 1:
@@ -1596,6 +1602,7 @@ st.markdown(
     '[class*="st-key-belegbild_"] img {max-height: 560px; width: auto; max-width: 100%; object-fit: contain;'
     ' display: block; margin: 0 auto;}'
     '[class*="st-key-belegbild_"] {position: relative;}'
+    '[class*="st-key-belegmehr_"] {display: none;}'
     + ''.join(f'[class*="st-key-belegbild_"] {x}, ' for x in (
         '[data-testid="stElementContainer"]', '[data-testid="stFullScreenFrame"]',
         '[data-testid="stFullScreenFrame"] > div', '[data-testid="stImage"]'))
@@ -1748,5 +1755,6 @@ st.caption(
     f"Proof of Concept · Modell `{MODEL}` (liest doppelt) · Schiedsrichter `{MODEL_GROSS}` · "
     f"Prompt-Version `{PROMPT_VERSION}`"
 )
-einfuehrung_ausfuehren()  # nur direkt nach Klick auf „Einführung starten“
+einfuehrung_ausfuehren()  # Autostart-Prüfung bzw. direkt nach Klick auf „Einführung starten“
+belegansicht_einbetten()  # große Belegansicht ohne Wartezeit
 

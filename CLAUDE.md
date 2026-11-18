@@ -48,6 +48,13 @@ Tabs werden über ihre Position gewählt und per Zeiger-Ereignissen geöffnet; j
 `highlight()` einzeln gezeigt, weil Ziele in unsichtbaren Tabs erst nach dem Wechsel existieren; im
 Skript jedes `<` vor Buchstaben als `<` maskieren (sonst entfernt Streamlits HTML-Filter das `<script>`).
 
+**Große Belegansicht:** Klick aufs Vorschaubild oder „Größer ansehen“ öffnet sie **im Browser**
+(`assets/belegansicht.js`) – sofort, ohne Neuberechnung durch Streamlit. Das Skript fängt den Klick ab und
+sammelt die Bilder über die key-Präfixe `belegbild_`/`belegmehr_` (Seiten über 3 liegen unsichtbar in
+`belegmehr_`). Der Streamlit-Dialog `_beleg_gross` bleibt als Rückfall. Eingebettet werden Browser-Skripte
+über `browser_skripte.py` (maskiert `<` für Streamlits HTML-Filter). Kurze Rückmeldung bei Wartezeiten: was
+im Browser geht, im Browser lösen statt einen Spinner vor einen Server-Durchlauf zu setzen.
+
 Weitere Bausteine: doppeltes Lesen + Schiedsrichter-Modell (`pipeline.py`), Rechnen nur im Code mit
 Decimal/Cent (`beleg_schema.py`), Rechenprüfungen und Nachfrage-Regeln (`checks.py`), Abgleich mit dem
 Firmen-Google-Kalender für Bewirtung/Übernachtung (`kalender.py`, noch nicht eingerichtet, s. u.),
