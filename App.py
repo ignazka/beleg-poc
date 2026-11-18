@@ -362,6 +362,34 @@ def _pruefzeile(name: str, ok: bool) -> str:
     return f"- {':material/check_circle:' if ok else ':material/cancel:'} {name}: **{'ja' if ok else 'nein'}**"
 
 
+def _lauf_knopf(label: str, name: str, *, ort=None, scope: str = "app", **knopf_args) -> bool:
+    """Knopf für längere Vorgänge (KI-Aufruf, Analyse, Probelauf).
+
+    Klick -> neuer Durchlauf, in dem derselbe Knopf ausgegraut nur einen Spinner zeigt und die anderen Tabs
+    gesperrt sind (CSS über key „laufknopf_…“) – so ist sichtbar, dass es läuft, und ein zweiter Klick oder
+    ein Klick woanders kann den Vorgang nicht abbrechen. Gibt True zurück, wenn der Vorgang JETZT laufen soll;
+    der Aufrufer ruft danach st.rerun(scope=scope) auf (dann ist der Knopf wieder normal).
+    ort: Spalte/Container (Standard: st); scope="fragment" innerhalb von st.dialog."""
+    ort = ort or st
+    merker = f"laeuft_{name}"
+    if st.session_state.pop(merker, False):
+        knopf_args.pop("icon", None)
+        knopf_args.pop("disabled", None)
+        ort.button(label, key=f"laufknopf_{name}", disabled=True, icon=":material/progress_activity:", **knopf_args)
+        return True
+    if ort.button(label, key=f"laufknopf_{name}", **knopf_args):
+        st.session_state[merker] = True
+        st.rerun(scope=scope)
+    return False
+
+
+def _lauf_meldung(name: str) -> None:
+    """Fehler/Hinweis aus dem letzten Lauf anzeigen (wird vor dem Neuzeichnen in session_state abgelegt)."""
+    meldung = st.session_state.pop(f"meldung_{name}", None)
+    if meldung:
+        st.error(meldung)
+
+
 _VORSCHAU_SEITEN = 3  # mehr Seiten nur in der großen Ansicht
 
 
@@ -766,23 +794,25 @@ def _aus_korrekturen_lernen(eintraege: list[dict]) -> None:
     if len(faelle) < 20:
         st.caption(f":material/info: Erst {len(faelle)} Fälle. Mit wenigen Fällen sind Vorschläge oft "
                    "Einzelfälle – richtig aussagekräftig wird es ab etwa 20–30 Korrekturen.")
-    if st.button(f"Verbesserungsvorschläge erstellen ({len(faelle)} {'Fall' if len(faelle) == 1 else 'Fälle'})", icon=":material/auto_awesome:",
-                 help=f"Modell: {MODEL_GROSS}."):
+    _lauf_meldung("lernen")
+    if _lauf_knopf(f"Verbesserungsvorschläge erstellen ({len(faelle)} {'Fall' if len(faelle) == 1 else 'Fälle'})",
+                   "lernen", icon=":material/auto_awesome:", help=f"Modell: {MODEL_GROSS}."):
         # auch Entwürfe zeigen: Fehler betreffen oft gerade neu angelegte Kategorien
         stand = {key: {**k, "status": "aktiv"} for key, k in kat_sichtbar(KAT_STAND).items()}
         try:
             with st.spinner("KI sucht Muster in den Korrekturen …"):
                 antwort = text_anfrage_json(LERN_PROMPT, lern_nachricht(stand, faelle))
         except Exception as ex:
-            st.error(f"Vorschläge konnten nicht erstellt werden: {ex}")
-            return
-        st.session_state["lern_ergebnis"] = {
-            **lern_antwort_pruefen(antwort, KAT_STAND, len(faelle)),
-            "dateien": [e.get("dateiname") or "?" for e in quellen],
-            "erstellt": datetime.now().isoformat(timespec="seconds"),
-            "anzahl": len(faelle),
-        }
-        st.session_state["lern_uebernommen"] = set()
+            st.session_state["meldung_lernen"] = f"Vorschläge konnten nicht erstellt werden: {ex}"
+        else:
+            st.session_state["lern_ergebnis"] = {
+                **lern_antwort_pruefen(antwort, KAT_STAND, len(faelle)),
+                "dateien": [e.get("dateiname") or "?" for e in quellen],
+                "erstellt": datetime.now().isoformat(timespec="seconds"),
+                "anzahl": len(faelle),
+            }
+            st.session_state["lern_uebernommen"] = set()
+        st.rerun()
     erg = st.session_state.get("lern_ergebnis")
     if erg:
         _lern_ergebnis_zeigen(erg)
@@ -1257,11 +1287,12 @@ def zeige_kategorien():
     )
 
     # Assistent: Freitext -> klare Regeln + Rückfragen (Vorschlag, wird erst mit "Speichern" übernommen)
-    if darf and st.button("Mit KI-Assistent in klare Regeln übersetzen", icon=":material/auto_awesome:",
-                          help=f"Modell: {MODEL_GROSS}. Füllt die Felder unten als Vorschlag aus."):
+    _lauf_meldung("assistent")
+    if darf and _lauf_knopf("Mit KI-Assistent in klare Regeln übersetzen", "assistent", icon=":material/auto_awesome:",
+                            help=f"Modell: {MODEL_GROSS}. Füllt die Felder unten als Vorschlag aus."):
         freitext = st.session_state[f"{praefix}_beschreibung"].strip()
         if not freitext:
-            st.error("Bitte zuerst eine Beschreibung eingeben.")
+            st.session_state["meldung_assistent"] = "Bitte zuerst eine Beschreibung eingeben."
         else:
             andere = {key: v for key, v in kat_aktiv(KAT_STAND).items() if key != wahl}
             try:
@@ -1271,8 +1302,8 @@ def zeige_kategorien():
                         assistent_nachricht(st.session_state[f"{praefix}_name"], freitext, andere),
                     )
             except Exception as e:
-                st.error(f"Assistent nicht erreichbar: {e}")
-            else:
+                st.session_state["meldung_assistent"] = f"Assistent nicht erreichbar: {e}"
+            else:  # die Regel-Felder werden erst weiter unten gezeichnet -> Werte jetzt setzen geht
                 for feld in ("erkennungsmerkmale", "abgrenzung", "nachfragen_wenn"):
                     if vorschlag.get(feld):
                         st.session_state[f"{praefix}_{feld}"] = str(vorschlag[feld])
@@ -1281,7 +1312,7 @@ def zeige_kategorien():
                     st.session_state[f"{praefix}_pflichtangaben"] = (
                         "\n".join(pflicht) if isinstance(pflicht, list) else str(pflicht))
                 st.session_state[f"{praefix}_rueckfragen"] = [str(r) for r in vorschlag.get("rueckfragen") or []]
-                st.rerun()
+        st.rerun()
 
     rueckfragen = st.session_state.get(f"{praefix}_rueckfragen")
     if rueckfragen:
@@ -1419,9 +1450,10 @@ def _zeige_testlauf(wahl: str, k: dict, praefix: str) -> None:
     if upload_ok:
         st.success(upload_ok, icon=":material/check_circle:")
 
+    _lauf_meldung("probelauf")
     spalte_start, spalte_upload = st.columns(2)
-    starten = spalte_start.button("Probelauf starten", type="primary", icon=":material/science:",
-                                  width="stretch", disabled=not belege)
+    starten = _lauf_knopf("Probelauf starten", "probelauf", ort=spalte_start, scope="fragment", type="primary",
+                          icon=":material/science:", width="stretch", disabled=not belege)
     with spalte_upload.popover("Weitere Belege hinzufügen", icon=":material/upload:", width="stretch"):
         neue = st.file_uploader(f"Belege für „{ordnername}“ auswählen", type=["pdf", "jpg", "jpeg", "png"],
                                 accept_multiple_files=True, key=f"{praefix}_testupload")
@@ -1455,13 +1487,13 @@ def _zeige_testlauf(wahl: str, k: dict, praefix: str) -> None:
                 fortschritt=lambda f, g: balken.progress(f / g, text=f"Probelauf: {f} von {g} Lesungen fertig"),
             )
         except Exception as e:
-            st.error(f"Probelauf fehlgeschlagen: {e}")
-            return
+            st.session_state["meldung_probelauf"] = f"Probelauf fehlgeschlagen: {e}"
+        else:
+            st.session_state[f"testlauf_{wahl}"] = {"ergebnisse": ergebnisse, "varianten": list(varianten),
+                                                    "erwartet": erwartete_kategorien(schluessel), "name": name}
         finally:
             kategorien_registrieren(labels(KAT_STAND))
-        balken.empty()
-        st.session_state[f"testlauf_{wahl}"] = {"ergebnisse": ergebnisse, "varianten": list(varianten),
-                                                "erwartet": erwartete_kategorien(schluessel), "name": name}
+        st.rerun(scope="fragment")  # Knopf wieder normal, Ergebnis anzeigen – Fenster bleibt offen
 
     ergebnis = st.session_state.get(f"testlauf_{wahl}")
     if ergebnis:
@@ -1624,10 +1656,19 @@ st.markdown(
     '[class*="st-key-belegspalte_"] [data-testid="stCaptionContainer"] {text-align: center;}'
     # Analyse-Knopf: während der Analyse nur ein drehender Spinner (Text bleibt für Screenreader erhalten)
     "@keyframes beleg-dreh {to {transform: rotate(360deg);}}"
-    '.st-key-analyse_knopf button:disabled [data-testid="stIconMaterial"] {animation: beleg-dreh 1s linear infinite;}'
-    '.st-key-analyse_knopf button:disabled [data-testid="stMarkdownContainer"] {position: absolute; width: 1px;'
+    '[class*="st-key-laufknopf_"] button:disabled [data-testid="stIconMaterial"]'
+    ' {animation: beleg-dreh 1s linear infinite;}'
+    '[class*="st-key-laufknopf_"] button:disabled [data-testid="stMarkdownContainer"] {position: absolute; width: 1px;'
     ' height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;}'
-    '.st-key-analyse_knopf button {min-width: 12rem;}'
+    '[class*="st-key-laufknopf_"] button {min-width: 12rem;}'
+    # Ladebalken oben über die ganze Breite, solange Streamlit rechnet (Filter, Blättern, Speichern, …)
+    "@keyframes lade-balken {from {background-position: -40% 0;} to {background-position: 140% 0;}}"
+    'body:has([data-testid="stStatusWidgetRunningIcon"], [data-testid="stStatusWidgetRunningManIcon"])::before'
+    ' {content: ""; position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 1000001;'
+    ' pointer-events: none; background: linear-gradient(90deg, transparent, #C25100, transparent) no-repeat;'
+    ' background-size: 40% 100%; animation: lade-balken 1.1s ease-in-out infinite;}'
+    "@media (prefers-reduced-motion: reduce) {body::before {animation: none !important;"
+    " background: #C25100 !important;}}"
     # Blätterleiste im Tab „Belege“: als Links in der Akzentfarbe erkennbar, dicht unter der Auswahl
     '.st-key-beleg_blaettern {margin-top: -.6rem; justify-content: center !important; gap: 1.5rem !important;}'
     '.st-key-beleg_blaettern button:not(:disabled), .st-key-beleg_blaettern button:not(:disabled) p'
@@ -1635,7 +1676,7 @@ st.markdown(
     '.st-key-beleg_blaettern button:not(:disabled):hover p {text-decoration: underline;}'
     '.st-key-beleg_blaettern [data-testid="stMarkdownContainer"] p {color: #5B6170; font-size: .9rem;}'
     # solange der Knopf gesperrt ist (Analyse läuft), sind die anderen Tabs gesperrt
-    '.stApp:has(.st-key-analyse_knopf button:disabled) .stTabs [role="tab"]:not([data-selected])'
+    '.stApp:has([class*="st-key-laufknopf_"] button:disabled) .stTabs [role="tab"]:not([data-selected])'
     ' {pointer-events: none; opacity: .4;}'
     # Belegspalte (Nachfragen/Auswertung) genau so hoch wie die rechte Spalte: Inhalt absolut im Spaltenrahmen,
     # das Bild füllt den Platz zwischen Überschrift und Button. Nur nebeneinander (ab 640 px), sonst normal.
@@ -1715,19 +1756,12 @@ with tab_analyse:
             st.session_state["upload_kennung"] = kennung
 
         knopf = f"{min(len(uploads), MAX_STAPEL)} Belege analysieren" if stapel_modus else "Beleg analysieren"
-        if st.session_state.pop("analyse_laeuft", False):
-            # Läuft: Knopf zeigt nur einen Spinner, die anderen Tabs sind gesperrt – ein Klick dort würde
-            # die Analyse abbrechen (Streamlit startet das Skript bei jeder Eingabe neu).
-            st.button(knopf, type="primary", disabled=True, icon=":material/progress_activity:",
-                      key="analyse_knopf")  # gleicher Schlüssel: derselbe Knopf, nur gesperrt mit Spinner
+        if _lauf_knopf(knopf, "analyse", type="primary"):
             st.caption("Analyse läuft – bitte warten. Die anderen Tabs sind so lange gesperrt.")
             if stapel_modus:
                 stapel_starten(uploads)
             else:
                 analyse_starten(uploads)  # zeigt den Fortschritt selbst an (st.status)
-            st.rerun()
-        elif st.button(knopf, type="primary", key="analyse_knopf"):
-            st.session_state["analyse_laeuft"] = True
             st.rerun()
 
     if "fehler" in st.session_state:

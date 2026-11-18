@@ -55,6 +55,13 @@ sammelt die Bilder über die key-Präfixe `belegbild_`/`belegmehr_` (Seiten übe
 über `browser_skripte.py` (maskiert `<` für Streamlits HTML-Filter). Kurze Rückmeldung bei Wartezeiten: was
 im Browser geht, im Browser lösen statt einen Spinner vor einen Server-Durchlauf zu setzen.
 
+**Rückmeldung bei Wartezeiten:** Knöpfe für längere Vorgänge (Analyse, Verbesserungsvorschläge, KI-Assistent,
+Probelauf) laufen über `_lauf_knopf(label, name, …)` in `App.py`: Nach dem Klick ist derselbe Knopf
+ausgegraut mit Spinner, die anderen Tabs sind gesperrt (CSS auf `st-key-laufknopf_…`), danach `st.rerun()`
+(im Dialog `scope="fragment"`); Fehler über `st.session_state["meldung_<name>"]` + `_lauf_meldung`. Neue
+lange Vorgänge genauso bauen. Zusätzlich zeigt ein orangefarbener Ladebalken oben jeden Server-Durchlauf
+(CSS auf Streamlits `stStatusWidgetRunningIcon`).
+
 Weitere Bausteine: doppeltes Lesen + Schiedsrichter-Modell (`pipeline.py`), Rechnen nur im Code mit
 Decimal/Cent (`beleg_schema.py`), Rechenprüfungen und Nachfrage-Regeln (`checks.py`), Abgleich mit dem
 Firmen-Google-Kalender für Bewirtung/Übernachtung (`kalender.py`, noch nicht eingerichtet, s. u.),

@@ -32,6 +32,7 @@ try {
   const js = async (expr) => (await cdp("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value;
   await cdp("Runtime.enable");
   // Tour nicht automatisch starten lassen
+  await cdp("Page.enable");
   await cdp("Page.addScriptToEvaluateOnNewDocument", { source: "localStorage.setItem('praktikantai_tour_gesehen', '1')" });
   await cdp("Page.navigate", { url });
   for (let i = 0; i < 120 && (await js("document.querySelectorAll('[role=tab]').length")) < 4; i++) await warte(500);
