@@ -391,44 +391,28 @@ def _lauf_meldung(name: str) -> None:
         st.error(meldung)
 
 
-_VORSCHAU_SEITEN = 3  # mehr Seiten nur in der großen Ansicht
-
-
-@st.dialog("Beleg in voller Größe", width="large")
-def _beleg_gross(bilder: list[bytes], titel: str) -> None:
-    st.caption(f"{titel} · Klick aufs Bild schließt die Ansicht")
-    with st.container(key="grossbild"):
-        for i, bild in enumerate(bilder, start=1):
-            st.image(bild, width="stretch", caption=f"Seite {i} von {len(bilder)}")
-        # unsichtbarer Button über den Bildern (CSS): Klick schließt das Fenster (Neuladen ohne Dialog)
-        if st.button("Große Ansicht schließen", key="bildklick_schliessen"):
-            st.rerun()
-
-
 def _beleg_vorschau(bilder: list[bytes], titel: str, key: str) -> None:
-    """Kompakte Vorschau (Höhe begrenzt, mehrere Seiten nebeneinander) + Button für die große Ansicht."""
+    """Belegansicht: die aktuelle Seite groß (in der Belegspalte so hoch wie das Formular daneben), bei mehreren
+    Seiten darunter „‹ Seite x von n ›“ und eine Leiste mit Mini-Vorschauen.
+
+    Gezeichnet werden alle Seiten; sichtbar ist nur die gewählte. Das Blättern übernimmt assets/belegansicht.js
+    im Browser – sofort, ohne Neuberechnung durch Streamlit. titel: Dateiname (derzeit nur informativ)."""
     if not bilder:
         return
     n = len(bilder)
     with st.container(key=f"belegbild_{key}"):
-        spalten = st.columns(min(n, _VORSCHAU_SEITEN)) if n > 1 else [st]
-        for spalte, bild in zip(spalten, bilder):
-            spalte.image(bild)
-        # unsichtbarer Button über dem ganzen Bild (CSS): Klick aufs Bild öffnet die große Ansicht.
-        # assets/belegansicht.js fängt den Klick im Browser ab (sofort, ohne Neuberechnung); der Streamlit-
-        # Dialog unten ist nur der Rückfall, falls das Skript fehlt.
-        bild_klick = st.button("Beleg vergrößern", key=f"bildklick_{key}")
-    if n > _VORSCHAU_SEITEN:  # weitere Seiten unsichtbar mitliefern, damit die große Ansicht alle zeigt
-        with st.container(key=f"belegmehr_{key}"):
-            for bild in bilder[_VORSCHAU_SEITEN:]:
-                st.image(bild)
-    if n > _VORSCHAU_SEITEN:
-        st.caption(f"{n} Seiten – {n - _VORSCHAU_SEITEN} weitere in der großen Ansicht")
-    elif n > 1:
-        st.caption(f"{n} Seiten")
-    knopf = st.button("Größer ansehen", icon=":material/zoom_in:", key=f"gross_{key}")
-    if bild_klick or knopf:
-        _beleg_gross(bilder, titel)
+        for bild in bilder:
+            st.image(bild)
+    if n > 1:
+        st.html(
+            f'<div class="belegnav" data-key="{html.escape(key)}" role="group" aria-label="Seiten blättern">'
+            '<button type="button" data-schritt="-1" aria-label="Vorherige Seite" disabled>‹</button>'
+            f'<span aria-live="polite">Seite 1 von {n}</span>'
+            '<button type="button" data-schritt="1" aria-label="Nächste Seite">›</button></div>'
+        )
+        with st.container(key=f"belegdaumen_{key}", horizontal=True, horizontal_alignment="center", gap="small"):
+            for bild in bilder:
+                st.image(bild, width=64)
 
 
 def _zeige_kalender(k: dict) -> None:
@@ -1806,26 +1790,31 @@ st.markdown(
     '[class*="st-key-belegbild_"] img {max-height: 560px; width: auto; max-width: 100%; object-fit: contain;'
     ' display: block; margin: 0 auto;}'
     '[class*="st-key-belegbild_"] {position: relative;}'
-    '[class*="st-key-belegmehr_"] {display: none;}'
     + ''.join(f'[class*="st-key-belegbild_"] {x}, ' for x in (
         '[data-testid="stElementContainer"]', '[data-testid="stFullScreenFrame"]',
         '[data-testid="stFullScreenFrame"] > div', '[data-testid="stImage"]'))
     + '[class*="st-key-belegbild_"] [data-testid="stImageContainer"]'
     ' {width: 100% !important; align-items: center; justify-content: center;}'
-    # Bild selbst ist klickbar: unsichtbarer Button liegt darüber; Hover-Vollbild-Symbol ausblenden
-    '[class*="st-key-bildklick_"] {position: absolute !important; inset: 0; z-index: 2; height: 100% !important;'
-    ' width: 100% !important;}'
-    '[class*="st-key-bildklick_"] > div, [class*="st-key-bildklick_"] .stButton {height: 100%; width: 100%;}'
-    '[class*="st-key-bildklick_"] button {width: 100% !important; height: 100%; opacity: 0; cursor: zoom-in;}'
-    '.st-key-grossbild {position: relative;}'
-    '.st-key-grossbild [data-testid="stElementToolbar"] {display: none;}'
-    '.st-key-bildklick_schliessen button {cursor: zoom-out;}'
-    '[class*="st-key-gross_"] button {width: auto !important; flex: 0 0 auto;}'
-    '[class*="st-key-belegbild_"] [data-testid="stElementToolbar"] {display: none;}'
-    # Button und Seitenangabe mittig unter dem Bild
-    '[class*="st-key-gross_"], [class*="st-key-gross_"] > div, [class*="st-key-gross_"] .stButton'
-    ' {display: flex; justify-content: center; width: 100%;}'
-    '[class*="st-key-belegspalte_"] [data-testid="stCaptionContainer"] {text-align: center;}'
+    '[class*="st-key-belegbild_"] [data-testid="stElementToolbar"],'
+    ' [class*="st-key-belegdaumen_"] [data-testid="stElementToolbar"] {display: none;}'
+    # mehrere Seiten: anfangs nur Seite 1 sichtbar, das Skript blendet beim Blättern die gewählte ein
+    '[class*="st-key-belegbild_"] > [data-testid="stElementContainer"]:not(:first-child) {display: none;}'
+    # Blätterleiste ‹ Seite x von n ›
+    '.belegnav {display: flex; align-items: center; justify-content: center; gap: .9rem; color: #5B6170;'
+    ' font-size: .92rem; user-select: none;}'
+    '.belegnav button {width: 34px; height: 34px; border-radius: 50%; border: 1px solid #D6D9E0; background: #fff;'
+    ' color: #C25100; font-size: 1.3rem; line-height: 1; cursor: pointer; display: inline-flex;'
+    ' align-items: center; justify-content: center; padding: 0 0 2px;}'
+    '.belegnav button:hover:not(:disabled) {border-color: #C25100; background: #FEF3EB;}'
+    '.belegnav button:disabled {color: #C3C7CF; cursor: default;}'
+    '.belegnav button:focus-visible {outline: 3px solid #C25100; outline-offset: 2px;}'
+    # Mini-Vorschauen aller Seiten, aktuelle orange umrandet
+    '[class*="st-key-belegdaumen_"] {flex-wrap: nowrap !important; overflow-x: auto; padding: 2px 0 4px;}'
+    '[class*="st-key-belegdaumen_"] img {height: 52px !important; width: auto !important; max-width: 64px;'
+    ' object-fit: contain; background: #F3F4F6; border: 2px solid transparent; border-radius: 4px;'
+    ' cursor: pointer; opacity: .65; transition: opacity .12s, border-color .12s;}'
+    '[class*="st-key-belegdaumen_"] img:hover {opacity: 1;}'
+    '[class*="st-key-belegdaumen_"] img[data-aktiv="1"] {border-color: #C25100; opacity: 1;}'
     # Analyse-Knopf: während der Analyse nur ein drehender Spinner (Text bleibt für Screenreader erhalten)
     "@keyframes beleg-dreh {to {transform: rotate(360deg);}}"
     '[class*="st-key-laufknopf_"] button:disabled [data-testid="stIconMaterial"]'
@@ -1855,8 +1844,8 @@ st.markdown(
     # solange der Knopf gesperrt ist (Analyse läuft), sind die anderen Tabs gesperrt
     '.stApp:has([class*="st-key-laufknopf_"] button:disabled) .stTabs [role="tab"]:not([data-selected])'
     ' {pointer-events: none; opacity: .4;}'
-    # Belegspalte (Nachfragen/Auswertung) genau so hoch wie die rechte Spalte: Inhalt absolut im Spaltenrahmen,
-    # das Bild füllt den Platz zwischen Überschrift und Button. Nur nebeneinander (ab 640 px), sonst normal.
+    # Belegspalte (Tab „Belege“) genau so hoch wie die rechte Spalte: Inhalt absolut im Spaltenrahmen, die
+    # aktuelle Seite füllt den Platz zwischen Überschrift und Blätterleiste. Nur nebeneinander (ab 640 px).
     "@media (min-width: 640px) {"
     '[data-testid="stColumn"]:has([class*="st-key-belegspalte_"]) {position: relative; min-height: 360px;}'
     '[class*="st-key-belegspalte_"] {position: absolute; inset: 0; flex-wrap: nowrap;}'

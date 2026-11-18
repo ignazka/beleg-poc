@@ -214,7 +214,8 @@ Feldprüfung).
 Alle. Beim Öffnen steht er dort, wo es etwas zu tun gibt. Der Tab zeigt die Zahl offener Nachfragen.
 
 **Ansicht**: Auswahlliste mit Vor/Zurück-Pfeilen. Oben die Gründe der KI (falls nachgefragt), links das
-Original (Klick aufs Bild oder „Größer ansehen“ = groß), rechts:
+Original groß und so hoch wie das Formular daneben (mehrere Seiten: unten ‹ Seite x von n › und
+Mini-Vorschauen zum Springen), rechts:
 
 - noch nicht geprüft → gleich das Formular: „Stimmt die Belegart …? Ja/Nein“ (ohne Vorauswahl), Felder mit
   der KI-Lesung, Begründung. Bei Nachfragen ist die Begründung Pflicht (Knopf „Korrigieren“), sonst nur, wenn

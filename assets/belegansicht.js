@@ -1,112 +1,77 @@
-// Große Belegansicht direkt im Browser – öffnet sofort, ohne dass Streamlit die Seite neu berechnet.
-// Greift Klicks auf das Vorschaubild (.st-key-bildklick_<key>) und „Größer ansehen“ (.st-key-gross_<key>) ab,
-// bevor Streamlit sie bekommt, und zeigt alle Seiten aus .st-key-belegbild_<key> / .st-key-belegmehr_<key>.
-// Fehlt etwas (keine Bilder gefunden), läuft der Klick normal weiter -> Streamlit-Fenster als Rückfall.
+// Belegansicht neben dem Formular: durch die Seiten blättern, ohne dass Streamlit die Seite neu berechnet.
+// Streamlit zeichnet ALLE Seiten in .st-key-belegbild_<key> (per CSS ist zunächst nur Seite 1 sichtbar),
+// darunter die Blätterleiste <div class="belegnav" data-key="<key>"> (‹ Seite x von n ›) und Mini-Vorschauen
+// in .st-key-belegdaumen_<key>. Dieses Skript merkt sich je Beleg die gewählte Seite und blendet sie ein.
 (function () {
   if (window.__belegAnsicht) return;
   window.__belegAnsicht = true;
 
-  const stil = document.createElement("style");
-  stil.textContent = `
-    .beleg-gross {position: fixed; inset: 0; z-index: 1000000; background: rgba(20, 21, 26, .82);
-      overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 18px;
-      padding: 56px 16px 32px; cursor: zoom-out; animation: beleg-gross-ein .12s ease-out;}
-    @keyframes beleg-gross-ein {from {opacity: 0;} to {opacity: 1;}}
-    .beleg-gross figure {margin: 0; max-width: 100%; text-align: center;}
-    .beleg-gross .beleg-gross-bild {position: relative; display: inline-block; min-width: 120px; min-height: 120px;
-      background: #fff; border-radius: 8px; box-shadow: 0 10px 40px rgba(0, 0, 0, .35); overflow: hidden;
-      vertical-align: top;}
-    /* jede Seite passt ganz in den sichtbaren Bereich (Höhe), breite Seiten höchstens Bildschirmbreite */
-    .beleg-gross img {display: block; width: auto; height: auto; max-height: calc(100vh - 110px);
-      max-width: min(1100px, calc(100vw - 32px)); opacity: 0; transition: opacity .15s;}
-    .beleg-gross img.geladen {opacity: 1;}
-    .beleg-gross .beleg-gross-bild:not(.fertig)::after {content: ""; position: absolute; top: 50%; left: 50%;
-      width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; border: 3px solid #E5E7EB;
-      border-top-color: #C25100; animation: beleg-gross-dreh .8s linear infinite;}
-    @keyframes beleg-gross-dreh {to {transform: rotate(360deg);}}
-    .beleg-gross figcaption {color: #fff; font: 500 .9rem "Source Sans", sans-serif; margin-top: 8px;}
-    .beleg-gross-zu {position: fixed; top: 12px; right: 16px; width: 40px; height: 40px; border-radius: 50%;
-      border: none; background: #fff; color: #14151A; font-size: 24px; line-height: 40px; cursor: pointer;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, .3);}
-    .beleg-gross-zu:focus-visible {outline: 3px solid #C25100; outline-offset: 2px;}
-    .beleg-gross-hinweis {position: fixed; top: 18px; left: 50%; transform: translateX(-50%); color: #fff;
-      font: .9rem "Source Sans", sans-serif; opacity: .85; pointer-events: none;}
-  `;
-  document.head.appendChild(stil);
+  const stand = new Map();  // key -> gewählte Seite (0-basiert)
+  const PRAEFIX = "st-key-belegbild_";
 
-  let offen = null;
-  let vorher = null;  // Fokus vor dem Öffnen (danach wiederherstellen)
-
-  function schliessen() {
-    if (!offen) return;
-    offen.remove();
-    offen = null;
-    document.removeEventListener("keydown", taste, true);
-    if (vorher && vorher.focus) vorher.focus();
+  function seitenVon(key) {
+    const box = document.querySelector(`.${PRAEFIX}${CSS.escape(key)}`);
+    return box ? [...box.children].filter((kind) => kind.querySelector("img")) : [];
   }
 
-  function taste(ev) {
-    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); schliessen(); }
-  }
-
-  function oeffnen(quellen) {
-    schliessen();
-    vorher = document.activeElement;
-    const box = document.createElement("div");
-    box.className = "beleg-gross";
-    box.setAttribute("role", "dialog");
-    box.setAttribute("aria-modal", "true");
-    box.setAttribute("aria-label", "Beleg in voller Größe");
-    const hinweis = document.createElement("div");
-    hinweis.className = "beleg-gross-hinweis";
-    hinweis.textContent = "Klick oder Esc schließt";
-    box.appendChild(hinweis);
-    quellen.forEach((src, i) => {
-      const fig = document.createElement("figure");
-      const rahmen = document.createElement("div");
-      rahmen.className = "beleg-gross-bild";
-      const img = document.createElement("img");
-      img.alt = `Beleg, Seite ${i + 1} von ${quellen.length}`;
-      const fertig = () => { img.classList.add("geladen"); rahmen.classList.add("fertig"); };
-      img.addEventListener("load", fertig);
-      img.addEventListener("error", fertig);
-      img.src = src;
-      if (img.complete) fertig();  // schon im Browser-Cache -> sofort da
-      rahmen.appendChild(img);
-      fig.appendChild(rahmen);
-      if (quellen.length > 1) {
-        const unter = document.createElement("figcaption");
-        unter.textContent = `Seite ${i + 1} von ${quellen.length}`;
-        fig.appendChild(unter);
-      }
-      box.appendChild(fig);
+  function anwenden(key) {
+    const seiten = seitenVon(key);
+    if (!seiten.length) return;
+    const i = Math.min(Math.max(stand.get(key) || 0, 0), seiten.length - 1);
+    stand.set(key, i);
+    seiten.forEach((seite, j) => {
+      const soll = j === i ? "block" : "none";
+      if (seite.style.display !== soll) seite.style.display = soll;
     });
-    const zu = document.createElement("button");
-    zu.className = "beleg-gross-zu";
-    zu.type = "button";
-    zu.setAttribute("aria-label", "Große Ansicht schließen");
-    zu.textContent = "×";
-    box.appendChild(zu);
-    box.addEventListener("click", schliessen);  // überall klicken schließt (auch aufs Bild)
-    document.addEventListener("keydown", taste, true);
-    document.body.appendChild(box);
-    offen = box;
-    zu.focus();
+    const nav = [...document.querySelectorAll(".belegnav")].find((n) => n.dataset.key === key);
+    if (nav) {
+      const text = nav.querySelector("span");
+      const neu = `Seite ${i + 1} von ${seiten.length}`;
+      if (text && text.textContent !== neu) text.textContent = neu;
+      nav.querySelectorAll("button").forEach((b) => {
+        const aus = Number(b.dataset.schritt) < 0 ? i === 0 : i === seiten.length - 1;
+        if (b.disabled !== aus) b.disabled = aus;
+      });
+    }
+    document.querySelectorAll(`.st-key-belegdaumen_${CSS.escape(key)} img`).forEach((img, j) => {
+      const aktiv = j === i ? "1" : "0";
+      if (img.dataset.aktiv !== aktiv) img.dataset.aktiv = aktiv;
+    });
   }
 
-  // Capture-Phase auf document: läuft vor Streamlits eigenem Klick-Handler und kann ihn abfangen
+  function alleAnwenden() {
+    document.querySelectorAll(`[class*="${PRAEFIX}"]`).forEach((box) => {
+      const klasse = [...box.classList].find((k) => k.startsWith(PRAEFIX));
+      if (klasse) anwenden(klasse.slice(PRAEFIX.length));
+    });
+  }
+
+  function gehe(key, seite) {
+    stand.set(key, seite);
+    anwenden(key);
+  }
+
   document.addEventListener("click", (ev) => {
-    const huelle = ev.target.closest('[class*="st-key-bildklick_"], [class*="st-key-gross_"]');
-    if (!huelle || !ev.target.closest("button")) return;
-    const klasse = [...huelle.classList].find((k) => /^st-key-(bildklick|gross)_/.test(k));
-    const key = klasse && klasse.replace(/^st-key-(bildklick|gross)_/, "");
-    if (!key || key === "schliessen") return;  // Schließ-Fläche im Streamlit-Fenster: nicht anfassen
-    const sel = `.st-key-belegbild_${CSS.escape(key)} img, .st-key-belegmehr_${CSS.escape(key)} img`;
-    const quellen = [...document.querySelectorAll(sel)].map((img) => img.currentSrc || img.src).filter(Boolean);
-    if (!quellen.length) return;  // Rückfall: Streamlit öffnet sein Fenster
-    ev.preventDefault();
-    ev.stopPropagation();
-    ev.stopImmediatePropagation();
-    oeffnen(quellen);
-  }, true);
+    const knopf = ev.target.closest(".belegnav button");
+    if (knopf) {
+      const key = knopf.closest(".belegnav").dataset.key;
+      gehe(key, (stand.get(key) || 0) + Number(knopf.dataset.schritt));
+      return;
+    }
+    const leiste = ev.target.closest('[class*="st-key-belegdaumen_"]');
+    if (leiste && ev.target.tagName === "IMG") {
+      const klasse = [...leiste.classList].find((k) => k.startsWith("st-key-belegdaumen_"));
+      const bilder = [...leiste.querySelectorAll("img")];
+      gehe(klasse.slice("st-key-belegdaumen_".length), bilder.indexOf(ev.target));
+    }
+  });
+
+  // Streamlit zeichnet bei Eingaben neu – danach die gewählte Seite wieder einblenden (gebündelt pro Frame)
+  let geplant = false;
+  new MutationObserver(() => {
+    if (geplant) return;
+    geplant = true;
+    requestAnimationFrame(() => { geplant = false; alleAnwenden(); });
+  }).observe(document.body, { childList: true, subtree: true });
+  alleAnwenden();
 })();

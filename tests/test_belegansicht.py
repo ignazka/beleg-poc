@@ -1,8 +1,9 @@
-"""Große Belegansicht im Browser (assets/belegansicht.js): eingebettet, filterfest und passend zur App.
+"""Belegansicht neben dem Formular (App._beleg_vorschau + assets/belegansicht.js).
 
-Das Skript findet Bilder und Knöpfe über die key-Präfixe belegbild_/belegmehr_/bildklick_/gross_. Ändert sich
-einer davon in App.py, öffnet die schnelle Ansicht nicht mehr (nur noch der langsame Rückfall) – dieser Test
-fällt dann auf. Das Verhalten im Browser prüft tests/browser/belegansicht.mjs.
+Alle Seiten werden in .st-key-belegbild_<key> gezeichnet; das Skript blendet die gewählte ein und bedient die
+Blätterleiste (.belegnav[data-key]) und die Mini-Vorschauen (.st-key-belegdaumen_<key>). Ändern sich diese
+Namen in App.py, blättert nichts mehr – dieser Test fällt dann auf. Das Verhalten im Browser prüft
+tests/browser/belegansicht.mjs.
 """
 import re
 from pathlib import Path
@@ -21,21 +22,31 @@ def test_skript_uebersteht_streamlits_html_filter():
     assert not re.findall(r"<[/\w!]", skript)
 
 
-def test_key_praefixe_passen_zur_app():
-    for praefix in ("belegbild_", "belegmehr_", "bildklick_", "gross_"):
+def test_namen_passen_zur_app():
+    for praefix in ("belegbild_", "belegdaumen_"):
         assert f"st-key-{praefix}" in JS, praefix
         assert f'key=f"{praefix}{{key}}"' in APP, f"App.py vergibt keinen key {praefix}…"
+    assert ".belegnav" in JS and 'class="belegnav" data-key=' in APP
+    assert "dataset.schritt" in JS and 'data-schritt="-1"' in APP and 'data-schritt="1"' in APP
 
 
-def test_app_bettet_skript_ein():
-    at = A.app(analysen=[A.analyse_eintrag("mehr")])
-    assert any("belegansicht.js" in h.proto.body and h.proto.unsafe_allow_javascript for h in at.get("html"))
+def _beleg_mit_seiten(sha, seiten):
+    eintrag = A.analyse_eintrag(sha)
+    eintrag["beleg_pfade"] = [f"belege/{sha}_{i}.png" for i in range(seiten)]
+    return eintrag
 
 
-def test_rueckfall_dialog_ohne_skript():
-    """Ohne Browser-Skript (AppTest führt kein JS aus) öffnet der Knopf weiterhin das Streamlit-Fenster."""
-    at = A.app(analysen=[A.analyse_eintrag("x")])
+def test_mehrere_seiten_mit_blaetterleiste_und_vorschauen():
+    at = A.app(analysen=[_beleg_mit_seiten("drei", 3)])
     at.segmented_control[0].set_value("alle").run()
-    A.knopf(at, "Größer ansehen").click().run()
     A.keine_fehler(at)
-    assert any("Seite 1 von 1" in c.value for c in at.caption) or at.get("dialog")
+    navs = [h.proto.body for h in at.get("html") if h.proto.body.startswith('<div class="belegnav"')]
+    assert len(navs) == 1 and "Seite 1 von 3" in navs[0] and 'data-key="belege_drei"' in navs[0]
+    assert not any(b.label == "Größer ansehen" for b in at.button)  # kein Vollbild-Klick mehr
+    assert any("belegansicht.js" in h.proto.body for h in at.get("html"))
+
+
+def test_eine_seite_ohne_blaetterleiste():
+    at = A.app(analysen=[_beleg_mit_seiten("eins", 1)])
+    at.segmented_control[0].set_value("alle").run()
+    assert not any(h.proto.body.startswith('<div class="belegnav"') for h in at.get("html"))

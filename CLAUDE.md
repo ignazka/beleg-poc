@@ -52,10 +52,10 @@ Tabs werden über ihre Position gewählt und per Zeiger-Ereignissen geöffnet; j
 `highlight()` einzeln gezeigt, weil Ziele in unsichtbaren Tabs erst nach dem Wechsel existieren; im
 Skript jedes `<` vor Buchstaben als `<` maskieren (sonst entfernt Streamlits HTML-Filter das `<script>`).
 
-**Große Belegansicht:** Klick aufs Vorschaubild oder „Größer ansehen“ öffnet sie **im Browser**
-(`assets/belegansicht.js`) – sofort, ohne Neuberechnung durch Streamlit. Das Skript fängt den Klick ab und
-sammelt die Bilder über die key-Präfixe `belegbild_`/`belegmehr_` (Seiten über 3 liegen unsichtbar in
-`belegmehr_`). Der Streamlit-Dialog `_beleg_gross` bleibt als Rückfall. Eingebettet werden Browser-Skripte
+**Belegansicht** (`_beleg_vorschau`): die aktuelle Seite groß neben dem Formular (Belegspalte so hoch wie
+die rechte Spalte), bei mehreren Seiten darunter „‹ Seite x von n ›“ (`.belegnav`, per `st.html`) und
+Mini-Vorschauen (`belegdaumen_`). Alle Seiten werden in `belegbild_` gezeichnet; `assets/belegansicht.js`
+blendet nur die gewählte ein – Blättern ohne Neuberechnung durch Streamlit. Kein Vollbild-Klick mehr. Eingebettet werden Browser-Skripte
 über `browser_skripte.py` (maskiert `<` für Streamlits HTML-Filter). Kurze Rückmeldung bei Wartezeiten: was
 im Browser geht, im Browser lösen statt einen Spinner vor einen Server-Durchlauf zu setzen.
 

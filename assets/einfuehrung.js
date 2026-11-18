@@ -31,8 +31,8 @@
       text: "Mit „Vorheriger“ und „Nächster“ gehst du die Liste Beleg für Beleg durch. Darüber kannst du einen " +
             "Beleg auch gezielt auswählen." },
     { tab: 1, ziel: () => ersterSichtbarer(".st-key-belegspalte_belege"), titel: "Das Original",
-      text: "Links siehst du den hochgeladenen Beleg. Ein Klick aufs Bild zeigt ihn groß – noch ein Klick schließt " +
-            "die große Ansicht wieder." },
+      text: "Links siehst du den Beleg groß neben dem Formular – so kannst du jedes Feld direkt vergleichen. " +
+            "Bei mehreren Seiten blätterst du unten mit ‹ › oder klickst auf eine der kleinen Vorschauen." },
     { tab: 1,
       ziel: () => { const s = ersterSichtbarer(".st-key-belegspalte_belege");
                     const zeile = s && s.closest('[data-testid="stHorizontalBlock"]');

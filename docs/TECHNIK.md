@@ -42,7 +42,7 @@ anhand gesammelter Korrekturen verbessert (Abschnitt 5).
 | `kalender.py` | Abgleich Bewirtung/Übernachtung mit dem Firmenkalender |
 | `storage.py` | Ablage (Drive bzw. lokal), Kalenderzugriff |
 | `auth.py`, `marke.py`, `datenschutz.py` | Login, Branding, Datenschutzseite |
-| `einfuehrung.py`, `browser_skripte.py`, `assets/*.js` | Browser-Skripte: Einführungs-Tour, große Belegansicht |
+| `einfuehrung.py`, `browser_skripte.py`, `assets/*.js` | Browser-Skripte: Einführungs-Tour, Blättern in der Belegansicht |
 | `tests/` | pytest – Logik, Pipeline, Ablage, Oberfläche mit vorgetäuschter Ablage/KI (`tests/attrappe.py`) |
 
 ---
@@ -267,8 +267,8 @@ Ergebnisse ebenso. Gespeichert wird erst, was ein Mensch übernimmt (Kategorie-V
   (`kategorie_wahl_naechste`, `beleg_wahl_naechste`, `belege_filter_naechste`, `kategorie_vorschlaege_naechste`).
 - Gestaltung per CSS über `key=` → Klasse `.st-key-<key>`; Tabs sind react-aria (`[role=tab]`).
 - JavaScript nur über `st.html(..., unsafe_allow_javascript=True)`; Streamlits HTML-Filter entfernt ein
-  `<script>`, dessen Text nach Markup aussieht → `browser_skripte.maskieren`. Sofort-Reaktionen (große
-  Belegansicht, Tour) laufen deshalb im Browser.
+  `<script>`, dessen Text nach Markup aussieht → `browser_skripte.maskieren`. Sofort-Reaktionen (Blättern
+  in der Belegansicht, Tour) laufen deshalb im Browser.
 
 ---
 
@@ -277,7 +277,7 @@ Ergebnisse ebenso. Gespeichert wird erst, was ein Mensch übernimmt (Kategorie-V
 - `python -m pytest` (ca. 10 s, ohne API, Drive oder Secrets; `pip install -r requirements-dev.txt`).
   UI-Tests starten die echte `App.py` mit `streamlit.testing.v1.AppTest` und vorgetäuschter Ablage/KI
   (`tests/attrappe.py`, echter Drive-Zugriff ist dort gesperrt). GitHub Actions führt sie bei jedem Push aus.
-- Manuelle Browser-Tests (Tour, große Belegansicht) in `tests/browser/` (Node + Chrome).
+- Manuelle Browser-Tests (Tour, Belegansicht) in `tests/browser/` (Node + Chrome).
 - Lokal starten: `LOGIN_DEAKTIVIERT=1 streamlit run App.py` (Login aus, nur über die Umgebung möglich).
 - Secrets (Vorlage `.streamlit/secrets.toml.example`): `OPENROUTER_API_KEY`, `[auth]`, `[zugang]`,
   `[google_drive]`, optional `[kalender]`, `[datenschutz]`. Nie committen.
