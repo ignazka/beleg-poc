@@ -121,3 +121,62 @@ def test_alte_nachfrage_und_entscheidung_werden_gelesen():
 def test_leere_ablage():
     at = A.app()
     assert any("Noch keine Belege" in i.value for i in at.info)
+
+
+# --- Suche und Filter -------------------------------------------------------------------------------
+
+def _suchdaten():
+    return dict(
+        analysen=[
+            A.analyse_eintrag("flug", kategorie="sonstiger_beleg", restaurant_name="Wizz Air", datum="2026-03-02",
+                              belegnummer="W6-4711"),
+            A.analyse_eintrag("hotel", kategorie="uebernachtung", restaurant_name="Hotel Krone", datum="2026-03-03",
+                              adresse="Hauptstr. 13, Neresheim"),
+            A.analyse_eintrag("essen", restaurant_name="D'Oro", datum="2026-01-31", adresse="Unter den Linden 39, Berlin"),
+        ],
+        # geprüft: die KI las „Sonstiger Beleg“, richtig ist Übernachtung; Belegnummer korrigiert
+        feedback=[{**A.bewertung("flug", ki_kat="sonstiger_beleg", richtige_kat="uebernachtung"),
+                   "felder": {"belegnummer": {"modell": "W6-4711", "korrekt": "W6-4712", "richtig": False},
+                              "datum": {"modell": "2026-03-02", "korrekt": "2026-03-02", "richtig": True}}}],
+    )
+
+
+def _alle(at):
+    at.segmented_control[0].set_value("alle").run()
+    return at
+
+
+def _optionen(at):
+    return at.selectbox(key="beleg_wahl").options
+
+
+def test_suche_nach_aussteller_und_ort():
+    at = _alle(A.app(**_suchdaten()))
+    at.text_input(key="belege_suche").set_value("krone").run()
+    assert len(_optionen(at)) == 1 and "hotel.png" in _optionen(at)[0]
+    assert any("1 von 3 Belegen" in c.value for c in at.caption)
+    at.text_input(key="belege_suche").set_value("berlin linden").run()  # alle Wörter müssen vorkommen
+    assert len(_optionen(at)) == 1 and "essen.png" in _optionen(at)[0]
+    at.text_input(key="belege_suche").set_value("berlin krone").run()
+    assert any("Keine Belege passen zur Suche" in i.value for i in at.info)
+
+
+def test_suche_nutzt_korrigierte_werte():
+    at = _alle(A.app(**_suchdaten()))
+    at.text_input(key="belege_suche").set_value("W6-4712").run()  # korrigierte Belegnummer
+    assert len(_optionen(at)) == 1 and "flug.png" in _optionen(at)[0]
+    at.text_input(key="belege_suche").set_value("W6-4711").run()  # alte KI-Lesung findet nichts mehr
+    assert any("Keine Belege passen zur Suche" in i.value for i in at.info)
+
+
+def test_filter_belegart_und_zeitraum_und_zuruecksetzen():
+    from datetime import date
+
+    at = _alle(A.app(**_suchdaten()))
+    at.multiselect(key="belege_arten").set_value(["uebernachtung"]).run()  # Flug zählt geprüft als Übernachtung
+    assert len(_optionen(at)) == 2
+    at.date_input(key="belege_zeitraum").set_value((date(2026, 3, 3), date(2026, 3, 31))).run()
+    assert len(_optionen(at)) == 1 and "hotel.png" in _optionen(at)[0]
+    A.knopf(at, "Filter zurücksetzen").click().run()
+    A.keine_fehler(at)
+    assert len(_optionen(at)) == 3 and at.text_input(key="belege_suche").value == ""

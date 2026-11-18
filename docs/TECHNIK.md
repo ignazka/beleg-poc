@@ -94,6 +94,9 @@ Prüfung und – nur noch lesend – Entscheidungen der ersten Version. Daraus e
 *Nachfrage offen* · *Noch nicht geprüft* · *Geprüft – alles richtig* · *Geprüft – korrigiert* ·
 *Erledigt (ohne Bewertung)*. Berechnet wird das **einmal pro Durchlauf** (`_LAUF_CACHE`).
 
+Darüber filtert eine **Suchleiste** (`App._belege_suchen`): Suchbegriffe, Belegart, Zeitraum. Grundlage sind
+`App._beleg_werte` – bei geprüften Belegen die korrigierten Werte, sonst die KI-Lesung.
+
 Prüfen (`App._beleg_formular`):
 
 1. „Stimmt die Belegart …? Ja/Nein“ – ohne Vorauswahl, damit niemand die KI versehentlich bestätigt.

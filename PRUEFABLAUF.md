@@ -210,6 +210,10 @@ Entscheidungen der ersten Version (`entscheidungen/`).
 *Geprüft – alles richtig* · *Geprüft – korrigiert* · *Erledigt (ohne Bewertung)* (alte Entscheidung ohne
 Feldprüfung).
 
+**Suche** (ganz oben): Suchfeld über Dateiname, Belegnummer, Aussteller, Adresse, Belegart, Datum und Kommentar
+(mehrere Wörter: alle müssen vorkommen), Auswahl der Belegart und Zeitraum nach Belegdatum. Bei geprüften
+Belegen zählen die korrigierten Werte. „Filter zurücksetzen“ leert alles.
+
 **Filter** (oben, gut sichtbar): Nachfragen offen · Alle Nachfragen · Ungeprüft · Korrigiert · Mit Kommentar ·
 Alle. Beim Öffnen steht er dort, wo es etwas zu tun gibt. Der Tab zeigt die Zahl offener Nachfragen.
 

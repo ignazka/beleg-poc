@@ -1,6 +1,6 @@
 """Praktikant-AI (RE-ALIS) – Belege analysieren, Nachfragen, Kategorien, Auswertung."""
 
-from datetime import datetime
+from datetime import date, datetime
 from types import SimpleNamespace
 import csv
 import html
@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import streamlit as st
 
 from auth import aktueller_benutzer, darf_kategorien_bearbeiten, login_erzwingen
-from beleg_schema import FEEDBACK_FELDER, KATEGORIEN, STANDARD_KATEGORIEN, BelegAnalyse, kategorien_registrieren, anzeige, normalisieren, werte_gleich, zeitpunkt_de
+from beleg_schema import FEEDBACK_FELDER, KATEGORIEN, STANDARD_KATEGORIEN, BelegAnalyse, parse_datum, kategorien_registrieren, anzeige, normalisieren, werte_gleich, zeitpunkt_de
 from datenschutz import ist_datenschutzseite, zeige_datenschutz
 from extraction import MAX_SEITEN, MODEL, MODEL_GROSS, AnalyseFehler, dateien_zu_bildern, text_anfrage_json
 from pipeline import beleg_lesen
@@ -1139,6 +1139,81 @@ def _vergleichstabelle(kategorie: dict, felder: dict) -> None:
 _QUELLE = {"nachfrage": "Korrektur einer Nachfrage", "pruefung": "Prüfung im Tab „Belege“"}
 _QUELLE_ALT = "Feedback direkt nach der Analyse (frühere Version)"
 
+# --- Suche und Filter im Tab „Belege“ -------------------------------------------------------------
+
+_SUCH_FELDER = ("belegnummer", "restaurant_name", "adresse")  # + Dateiname, Kommentar, Belegart, Datum
+
+
+def _beleg_werte(b: dict) -> dict:
+    """Werte eines Belegs für Suche und Filter: geprüft -> die richtigen Werte, sonst die KI-Lesung."""
+    f, a = b.get("bewertung"), b.get("analyse_eintrag") or {}
+    werte = dict((f or a).get("analyse") or {})
+    if f:
+        for key, feld in (f.get("felder") or {}).items():
+            werte[key] = feld.get("korrekt")
+        werte["kategorie"] = f["kategorie"]["korrekt"]
+    else:
+        werte["kategorie"] = b["ki_kategorie"]
+    return werte
+
+
+def _beleg_suchtext(b: dict, werte: dict) -> str:
+    teile = [b.get("dateiname"), _kategorie_label(werte.get("kategorie")), anzeige(werte.get("datum")),
+             ((b.get("bewertung") or {}).get("kommentar"))]
+    teile += [anzeige(werte.get(k)) for k in _SUCH_FELDER]
+    teile += [anzeige(v) for v in (werte.get("zusatzfelder") or {}).values()]  # künftig: eigene Felder je Kategorie
+    return " ".join(str(t) for t in teile if t).casefold()
+
+
+def _belege_suchen(belege: list[dict]) -> list[dict]:
+    """Suchleiste über der Belegliste: Suchbegriffe (alle müssen vorkommen), Belegart, Zeitraum (Belegdatum)."""
+    ss = st.session_state
+    if ss.pop("belege_suche_zuruecksetzen", False):  # Widgets dürfen erst vor dem Zeichnen geleert werden
+        for k in ("belege_suche", "belege_arten", "belege_zeitraum"):
+            ss.pop(k, None)
+    werte = {b["sha"]: _beleg_werte(b) for b in belege}
+    vorhandene = sorted({w.get("kategorie") for w in werte.values() if w.get("kategorie")}, key=_kategorie_label)
+
+    spalte_suche, spalte_art, spalte_datum = st.columns([3, 2, 2], vertical_alignment="bottom")
+    suche = spalte_suche.text_input(
+        "Suchen", key="belege_suche", icon=":material/search:",
+        placeholder="Name, Ort, Beleg-Nr., Aussteller, Datei … (Enter)",
+        help="Durchsucht Dateiname, Belegnummer, Aussteller, Adresse, Belegart, Datum und Kommentar. Mehrere "
+             "Wörter: alle müssen vorkommen. Bei geprüften Belegen zählen die korrigierten Werte.")
+    arten = spalte_art.multiselect("Belegart", vorhandene, key="belege_arten", format_func=_kategorie_label,
+                                   placeholder="Alle Belegarten")
+    zeitraum = spalte_datum.date_input("Belegdatum von – bis", value=(), key="belege_zeitraum", format="DD.MM.YYYY")
+
+    begriffe = suche.casefold().split()
+    von = zeitraum[0] if len(zeitraum) >= 1 else None
+    bis = zeitraum[1] if len(zeitraum) >= 2 else None
+
+    def passt(b) -> bool:
+        w = werte[b["sha"]]
+        if arten and w.get("kategorie") not in arten:
+            return False
+        if von:
+            datum = parse_datum(w.get("datum"))
+            if not datum:
+                return False
+            tag = date.fromisoformat(datum)
+            if tag < von or (bis and tag > bis):
+                return False
+        if begriffe:
+            text = _beleg_suchtext(b, w)
+            return all(begriff in text for begriff in begriffe)
+        return True
+
+    treffer = [b for b in belege if passt(b)]
+    if begriffe or arten or von:
+        info, knopf = st.columns([4, 1], vertical_alignment="center")
+        info.caption(f":material/filter_alt: {len(treffer)} von {len(belege)} Belegen passen zur Suche.")
+        if knopf.button("Filter zurücksetzen", icon=":material/close:", type="tertiary", key="belege_suche_weg"):
+            ss["belege_suche_zuruecksetzen"] = True
+            st.rerun()
+    return treffer
+
+
 
 def zeige_belege():
     ss = st.session_state
@@ -1161,6 +1236,10 @@ def zeige_belege():
         return
     if not belege:
         st.info("Noch keine Belege. Lade im Tab „Belege hochladen“ Belege hoch.")
+        return
+    belege = _belege_suchen(belege)
+    if not belege:
+        st.info("Keine Belege passen zur Suche.")
         return
 
     def mit_kommentar(b):
