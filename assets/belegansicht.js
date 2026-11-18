@@ -12,10 +12,13 @@
       overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 18px;
       padding: 56px 16px 32px; cursor: zoom-out; animation: beleg-gross-ein .12s ease-out;}
     @keyframes beleg-gross-ein {from {opacity: 0;} to {opacity: 1;}}
-    .beleg-gross figure {margin: 0; max-width: min(1100px, 100%); width: 100%; text-align: center;}
-    .beleg-gross .beleg-gross-bild {position: relative; min-height: 120px; background: #fff; border-radius: 8px;
-      box-shadow: 0 10px 40px rgba(0, 0, 0, .35); overflow: hidden;}
-    .beleg-gross img {display: block; width: 100%; height: auto; opacity: 0; transition: opacity .15s;}
+    .beleg-gross figure {margin: 0; max-width: 100%; text-align: center;}
+    .beleg-gross .beleg-gross-bild {position: relative; display: inline-block; min-width: 120px; min-height: 120px;
+      background: #fff; border-radius: 8px; box-shadow: 0 10px 40px rgba(0, 0, 0, .35); overflow: hidden;
+      vertical-align: top;}
+    /* jede Seite passt ganz in den sichtbaren Bereich (Höhe), breite Seiten höchstens Bildschirmbreite */
+    .beleg-gross img {display: block; width: auto; height: auto; max-height: calc(100vh - 110px);
+      max-width: min(1100px, calc(100vw - 32px)); opacity: 0; transition: opacity .15s;}
     .beleg-gross img.geladen {opacity: 1;}
     .beleg-gross .beleg-gross-bild:not(.fertig)::after {content: ""; position: absolute; top: 50%; left: 50%;
       width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; border: 3px solid #E5E7EB;

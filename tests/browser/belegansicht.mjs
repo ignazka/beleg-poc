@@ -33,13 +33,14 @@ try {
   await cdp("Runtime.enable");
   // Tour nicht automatisch starten lassen
   await cdp("Page.enable");
-  await cdp("Page.addScriptToEvaluateOnNewDocument", { source: "localStorage.setItem('praktikantai_tour_gesehen', '1')" });
+  await cdp("Page.addScriptToEvaluateOnNewDocument", { source: "try { localStorage.setItem('praktikantai_tour_gesehen', '1') } catch (e) {}" });
   await cdp("Page.navigate", { url });
   for (let i = 0; i < 120 && (await js("document.querySelectorAll('[role=tab]').length")) < 4; i++) await warte(500);
   // Tab „Belege“ per echtem Mausklick öffnen
   const pos = await js("(() => { const r = document.querySelectorAll('[role=tab]')[1].getBoundingClientRect(); return {x: r.x + r.width / 2, y: r.y + r.height / 2}; })()");
   for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x: pos.x, y: pos.y, button: "left", clickCount: 1 });
   for (let i = 0; i < 60 && !(await js("!!document.querySelector('.st-key-belegspalte_belege [class*=st-key-bildklick_] button')")); i++) await warte(500);
+  for (let i = 0; i < 40 && !(await js('!!window.__belegAnsicht')); i++) await warte(250);  // Skript geladen
   await warte(1500);
 
   const klickUndMessen = (selektor) => js(`(async () => {
@@ -61,7 +62,7 @@ try {
   const erg = {};
   erg.bild_ms = await zeit(".st-key-belegspalte_belege [class*=st-key-bildklick_] button");
   await warte(400);
-  erg.bild = await js("({seiten: document.querySelectorAll('.beleg-gross img').length, geladen: document.querySelectorAll('.beleg-gross img.geladen').length, streamlitDialog: !!document.querySelector('[data-testid=stDialog]'), fokus: document.activeElement?.className})");
+  erg.bild = await js("({hoehen: [...document.querySelectorAll('.beleg-gross img')].map(i => Math.round(i.getBoundingClientRect().height)), fenster: innerHeight, seiten: document.querySelectorAll('.beleg-gross img').length, geladen: document.querySelectorAll('.beleg-gross img.geladen').length, streamlitDialog: !!document.querySelector('[data-testid=stDialog]'), fokus: document.activeElement?.className})");
   if (bildDatei) {
     const bild = await cdp("Page.captureScreenshot", { format: "png" });
     writeFileSync(bildDatei, Buffer.from(bild.result.data, "base64"));
