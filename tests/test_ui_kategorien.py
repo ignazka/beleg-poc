@@ -49,6 +49,10 @@ def test_lernen_fehler_wird_nach_dem_lauf_angezeigt():
 
 # --- SKR04-Konto ---------------------------------------------------------------------------------------
 
+def _zellen(at) -> set[str]:
+    return {str(z) for t in at.table for z in t.value.to_numpy().ravel()}
+
+
 def _speichern(at):
     A.knopf(at, "Speichern").click().run()
     A.keine_fehler(at)
@@ -69,7 +73,7 @@ def test_konto_aus_vorlage_uebernehmen_und_speichern():
     assert (gespeichert["skr04_konto"], gespeichert["skr04_bezeichnung"]) == ("6660", "Übernachtung Mitarbeiter")
     # nach dem Speichern steht das Konto wieder im Formular und in der Übersicht
     assert A.feld(at, "Kontonummer").value == "6660"
-    assert any("6660 · Übernachtung Mitarbeiter" in str(t.value) for t in at.table)
+    assert "6660 · Übernachtung Mitarbeiter" in _zellen(at)
 
 
 def test_eigenes_konto_ohne_bezeichnung():
@@ -97,3 +101,37 @@ def test_ohne_konto_nur_hinweis():
     assert any("Noch kein Konto festgelegt" in c.value for c in at.caption)
     _speichern(at)  # ohne Konto speichern bleibt erlaubt
     assert A.SPEICHER["kategorien"][-1]["skr04_konto"] == ""
+
+
+def _kategorie_mit_ausnahmen():
+    return {"schluessel": "restaurant_beleg", "version": 1, "zeitpunkt": "2026-11-21T10:00:00",
+            "skr04_konto": "6640", "skr04_bezeichnung": "Bewirtungskosten",
+            "konto_ausnahmen": [{"wenn": "nur ein Gedeck", "konto": "6664", "bezeichnung": "Verpflegung"}]}
+
+
+def test_ausnahmen_bleiben_beim_speichern_erhalten():
+    at = A.app(kategorien=[_kategorie_mit_ausnahmen()])
+    at.selectbox(key="kategorie_wahl").set_value("restaurant_beleg").run()
+    assert "6664 · Verpflegung, wenn nur ein Gedeck" in _zellen(at)  # Übersicht
+    _speichern(at)
+    assert A.SPEICHER["kategorien"][-1]["konto_ausnahmen"] == _kategorie_mit_ausnahmen()["konto_ausnahmen"]
+
+
+def test_konto_im_ergebnis_und_im_pruefformular():
+    png = ("beleg.png", A.bild_png(), "image/png")
+    at = A.app(kategorien=[_kategorie_mit_ausnahmen()], ki={"dateien": [png], "analyse": A.analyse(konto="6664")})
+    A.knopf(at, "Beleg analysieren").click().run()
+    at.run()
+    A.keine_fehler(at)
+    assert any("6664 · Verpflegung" in m.value for m in at.markdown if "Konto (SKR04)" in m.value)
+    assert A.SPEICHER["analysen"][-1]["analyse"]["konto"] == "6664"
+
+    # Prüfen im Tab „Belege“: Konto ist vorbelegt und lässt sich korrigieren
+    at.segmented_control[0].set_value("ungeprueft").run()
+    assert A.feld(at, "Konto").value == "6664"
+    A.radio(at, "Stimmt die Belegart").set_value("ja").run()
+    A.feld(at, "Konto").set_value("6640")
+    A.feld(at, "Begründung").set_value("Geschäftsessen mit Kunde")
+    A.knopf(at, "Prüfung speichern").click().run()
+    A.keine_fehler(at)
+    assert A.SPEICHER["feedback"][-1]["felder"]["konto"] == {"modell": "6664", "korrekt": "6640", "richtig": False}

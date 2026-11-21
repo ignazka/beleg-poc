@@ -98,6 +98,58 @@ def _als_text(wert) -> str:
     return str(wert or "").strip()
 
 
+def konto_ausnahmen(k: dict) -> list[dict]:
+    """Gültige Konto-Ausnahmen der Kategorie: [{"wenn", "konto", "bezeichnung"}] (unvollständige weglassen)."""
+    ergebnis = []
+    for a in k.get("konto_ausnahmen") or []:
+        if not isinstance(a, dict):
+            continue
+        wenn, konto = str(a.get("wenn") or "").strip(), str(a.get("konto") or "").strip()
+        if wenn and konto and not skr04.nummer_pruefen(konto):
+            ergebnis.append({"wenn": wenn, "konto": konto, "bezeichnung": str(a.get("bezeichnung") or "").strip()})
+    return ergebnis
+
+
+def ausnahmen_aus_tabelle(zeilen: list[dict]) -> tuple[list[dict], str | None]:
+    """Zeilen der Ausnahmen-Tabelle im Kategorien-Tab -> (gültige Ausnahmen, Fehlertext oder None).
+    Leere Zeilen fallen weg; fehlt die Bezeichnung, kommt sie aus der Vorlage."""
+    def text(x):
+        return "" if x is None or x != x else str(x).strip()  # x != x: leere Zelle (NaN) aus der Tabelle
+    vorlage = dict(reversed(skr04.VORLAGE))  # erste Bezeichnung je Nummer
+    ausnahmen, fehler = [], []
+    for nr, z in enumerate(zeilen, start=1):
+        wenn, konto, bezeichnung = text(z.get("wenn")), text(z.get("konto")), text(z.get("bezeichnung"))
+        if not (wenn or konto or bezeichnung):
+            continue
+        if not wenn:
+            fehler.append(f"Zeile {nr}: Bitte die Bedingung („Wenn …“) ausfüllen.")
+        elif skr04.nummer_pruefen(konto) or not konto:
+            fehler.append(f"Zeile {nr}: Die Kontonummer hat genau vier Ziffern.")
+        else:
+            ausnahmen.append({"wenn": wenn, "konto": konto, "bezeichnung": bezeichnung or vorlage.get(konto, "")})
+    return ausnahmen, (" ".join(["Ausnahmen:"] + fehler) if fehler else None)
+
+
+def konto_regeln(k: dict) -> str:
+    """Konto-Regel für den Prompt – nur bei Ausnahmen (sonst wählt die KI kein Konto, der Code setzt es)."""
+    ausnahmen = konto_ausnahmen(k)
+    if not ausnahmen:
+        return ""
+    nummer = (k.get("skr04_konto") or "").strip()
+    standard = f'"{nummer}" ({k.get("skr04_bezeichnung") or "ohne Bezeichnung"})' if nummer else "keins"
+    regeln = "; ".join(f'"{a["konto"]}" ({a["bezeichnung"] or "ohne Bezeichnung"}), wenn {a["wenn"]}'
+                       for a in ausnahmen)
+    return f"Standard {standard}. Ausnahmen: {regeln}"
+
+
+def konten(stand: dict[str, dict]) -> dict[str, dict]:
+    """{schluessel: {"standard": "6640" | None, "ausnahmen": ["6664", …]}} der aktiven Kategorien – damit prüft
+    beleg_schema, ob die KI ein erlaubtes Konto gewählt hat."""
+    return {key: {"standard": (k.get("skr04_konto") or "").strip() or None,
+                  "ausnahmen": [a["konto"] for a in konto_ausnahmen(k)]}
+            for key, k in aktiv(stand).items()}
+
+
 def prompt_abschnitt(stand: dict[str, dict]) -> str:
     """Kategorie-Wissen für den System-Prompt (nur aktive Kategorien)."""
     bloecke = []
@@ -107,22 +159,29 @@ def prompt_abschnitt(stand: dict[str, dict]) -> str:
             text = _als_text(k.get(feld))
             if text:
                 zeilen.append(f"    {FELD_LABEL[feld]}: {text}")
+        if konto_regeln(k):
+            zeilen.append(f"    Konto (SKR04): {konto_regeln(k)}")
         bloecke.append("\n".join(zeilen))
     return "\n".join(bloecke)
 
 
 def wissens_hash(stand: dict[str, dict]) -> str:
-    """Kurzer Fingerabdruck des Kategorie-Wissens -> Teil der Prompt-Version (Auswertung vorher/nachher)."""
-    roh = json.dumps({k: {f: _als_text(v.get(f)) for f in ("name",) + FELDER} for k, v in aktiv(stand).items()},
-                     sort_keys=True, ensure_ascii=False)
+    """Kurzer Fingerabdruck des Kategorie-Wissens -> Teil der Prompt-Version (Auswertung vorher/nachher).
+    Konto-Regeln zählen nur mit, wenn es Ausnahmen gibt (nur dann stehen sie im Prompt)."""
+    def wissen(v):
+        w = {f: _als_text(v.get(f)) for f in ("name",) + FELDER}
+        if konto_regeln(v):
+            w["konto"] = konto_regeln(v)
+        return w
+    roh = json.dumps({k: wissen(v) for k, v in aktiv(stand).items()}, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(roh.encode()).hexdigest()[:6]
 
 
 def konto_text(k: dict) -> str:
     """SKR04-Konto der Kategorie als '6640 · Bewirtungskosten' (leer, wenn keins festgelegt).
 
-    Das Konto ist für die spätere Buchung in sevDesk gedacht, nicht für die Erkennung – es steht deshalb
-    nicht im Prompt und ändert die Prompt-Version nicht.
+    Das Standardkonto allein steht nicht im Prompt (die KI muss nichts entscheiden). Erst Konto-Ausnahmen
+    („wenn … → anderes Konto“) gehen in den Prompt, siehe konto_regeln.
     """
     return skr04.als_text(k.get("skr04_konto"), k.get("skr04_bezeichnung"))
 
@@ -131,7 +190,10 @@ def als_dokument(k: dict) -> str:
     """Lesbarer Text für das Google-Doc im Drive-Ordner der Kategorie."""
     teile = [k["name"], "", f"Schlüssel: {k['schluessel']} · Status: {k.get('status')} · "
              f"Version {k.get('version')} · zuletzt geändert von {k.get('bearbeiter') or '–'}",
-             f"SKR04-Konto: {konto_text(k) or 'noch nicht festgelegt'}", ""]
+             f"SKR04-Konto: {konto_text(k) or 'noch nicht festgelegt'}"]
+    teile += [f"  Ausnahme: {skr04.als_text(a['konto'], a['bezeichnung'])}, wenn {a['wenn']}"
+              for a in konto_ausnahmen(k)]
+    teile.append("")
     for feld in FELDER:
         text = _als_text(k.get(feld))
         if text:

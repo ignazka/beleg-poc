@@ -106,6 +106,8 @@ def _gruende_mit_art(a: BelegAnalyse, befunde: list[str]) -> list[tuple[str, boo
         gruende.append(("Pflichtangaben laut Kategorie fehlen: " + ", ".join(a.fehlende_pflichtangaben), False))
     if a.ausland:
         gruende.append(("Auslandsbeleg – dafür gilt eine abweichende Handhabe.", True))
+    if a.konto_unsicher:  # Ermessensfrage laut Konto-Ausnahmen der Kategorie, genaueres Lesen hilft nicht
+        gruende.append((f"Konto unsicher: {a.konto_grund or 'ohne Begründung'}", True))
     if a.ec_passt_zur_rechnung is False:  # kann an einem falsch gelesenen Datum/Betrag liegen
         gruende.append(("EC-Beleg passt nicht zur Rechnung (Datum/Uhrzeit/Adresse/Name).", False))
 
@@ -150,6 +152,7 @@ def vergleichswerte(a: BelegAnalyse) -> dict[str, str]:
     )
     return {
         "Belegart": a.kategorie,
+        "Konto": a.konto or "",  # weicht nur ab, wenn die Kategorie Konto-Ausnahmen hat
         "Belegnummer": _text_norm(a.belegnummer),
         "Aussteller": _text_norm(a.restaurant_name),
         "Datum": a.datum or "",

@@ -32,6 +32,16 @@ def kategorien_registrieren(aktive: dict[str, str]) -> None:
     KATEGORIEN.update(neu)
 
 
+# SKR04-Konten je aktiver Kategorie: {schluessel: {"standard": "6640" | None, "ausnahmen": ["6664", ...]}}.
+# Die KI darf nur eines dieser Konten wählen; alles andere ersetzt der Code durch das Standardkonto.
+KONTEN: dict[str, dict] = {}
+
+
+def konten_registrieren(konten: dict[str, dict]) -> None:
+    KONTEN.clear()
+    KONTEN.update(konten)
+
+
 BEWIRTUNG_KATEGORIEN = {"restaurant_beleg", "restaurant_mit_ec_beleg", "nur_ec_beleg", "bewirtungsbeleg_intern"}
 
 # Felder, die im Feedback einzeln bewertet/korrigiert werden: (key, Label, Typ)
@@ -47,6 +57,7 @@ FEEDBACK_FELDER = [
     ("ec_betrag", "EC-/Kartenbetrag (€)", "betrag"),
     ("trinkgeld", "Trinkgeld (€)", "betrag"),
     ("steuersaetze", "Steuersätze (%)", "saetze"),
+    ("konto", "Konto (SKR04-Nr.)", "konto"),
 ]
 
 _LEER = {"", "null", "none", "-", "–"}
@@ -165,7 +176,17 @@ def parse_saetze(value):
     return sorted(result)
 
 
+def parse_konto(value):
+    """'6640', '6640 · Bewirtungskosten', 6640 -> '6640'; ohne vierstellige Nummer -> None"""
+    if value is None or isinstance(value, bool):
+        return None
+    treffer = re.search(r"(?<!\d)\d{4}(?!\d)", str(value))
+    return treffer.group() if treffer else None
+
+
 def normalisieren(feld_typ, value):
+    if feld_typ == "konto":
+        return parse_konto(value)
     if feld_typ == "betrag":
         return parse_betrag(value)
     if feld_typ == "datum":
@@ -278,6 +299,9 @@ class BelegAnalyse(BaseModel):
     steuerzeilen: list[Steuerzeile] = Field(default_factory=list)
     steuersaetze: list[float] = Field(default_factory=list)
     hinweise: list[str] = Field(default_factory=list)
+    konto: str | None = None             # SKR04-Nr.; die KI wählt nur bei Konto-Ausnahmen, sonst setzt der Code
+    konto_unsicher: bool = False
+    konto_grund: str | None = None
     korrekturen: list[str] = Field(default_factory=list)  # nur vom Code gesetzt (Umdeutungen), nie vom Modell
 
     @field_validator("kategorie", mode="before")
@@ -302,7 +326,13 @@ class BelegAnalyse(BaseModel):
     def _datum(cls, v):
         return parse_datum(v)
 
-    @field_validator("belegnummer", "restaurant_name", "adresse", "uhrzeit", "kategorie_grund", mode="before")
+    @field_validator("konto", mode="before")
+    @classmethod
+    def _konto(cls, v):
+        return parse_konto(v)
+
+    @field_validator("belegnummer", "restaurant_name", "adresse", "uhrzeit", "kategorie_grund", "konto_grund",
+                     mode="before")
     @classmethod
     def _text(cls, v):
         return parse_text(v)
@@ -338,7 +368,7 @@ class BelegAnalyse(BaseModel):
         return bool(v)
 
     @field_validator("lesbar", "steuersatz_erkennbar", "datum_erkennbar", "kategorie_unsicher", "ausland",
-                     mode="before")
+                     "konto_unsicher", mode="before")
     @classmethod
     def _bool(cls, v):
         if isinstance(v, str):
@@ -363,7 +393,18 @@ class BelegAnalyse(BaseModel):
             # Trinkgeld = EC minus Rechnung; ein vom Modell selbst errechneter Wert wird ersetzt
             diff = differenz(self.ec_betrag, self.brutto)
             self.trinkgeld = diff if diff > 0 else None
+        self._konto_festlegen()
         return self
+
+    def _konto_festlegen(self) -> None:
+        """Konto der KI nur übernehmen, wenn es eines der Konten der Kategorie ist; sonst Standardkonto.
+        Ohne Ausnahmen entscheidet die KI nichts -> immer Standardkonto, nie „unsicher“."""
+        konten = KONTEN.get(self.kategorie) or {}
+        erlaubt = {k for k in [konten.get("standard"), *(konten.get("ausnahmen") or [])] if k}
+        if not konten.get("ausnahmen"):
+            self.konto_unsicher, self.konto_grund = False, None
+        if self.konto not in erlaubt:
+            self.konto = konten.get("standard")
 
     @staticmethod
     def _zeilen_summe(zeilen) -> float | None:

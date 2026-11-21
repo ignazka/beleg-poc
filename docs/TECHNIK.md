@@ -131,9 +131,15 @@ Menschen pflegen, und über **Messung**:
 - `kategorien.prompt_abschnitt` setzt **nur aktive** Kategorien mit all ihren Regeln in die Prompt-Vorlage
   (`prompts.system_prompt`) ein. Das passiert bei jedem Seitenaufruf → Änderungen wirken sofort für alle.
 - **SKR04-Konto** je Kategorie (`skr04_konto` 4-stellig, `skr04_bezeichnung` optional): aus der Vorlage in
-  `skr04.py` übernehmen oder frei eintragen. Gedacht für die Buchung in sevDesk, deshalb **nicht** im Prompt
-  und nicht im Wissens-Fingerabdruck; steht im lesbaren Google-Doc und im Versionsverlauf. Ohne Konto wird
-  trotzdem gespeichert (nur Hinweis), eine falsche Nummer verhindert das Speichern.
+  `skr04.py` übernehmen oder frei eintragen. Ohne Konto wird trotzdem gespeichert (nur Hinweis), eine falsche
+  Nummer verhindert das Speichern. Das Standardkonto allein steht **nicht** im Prompt – der Code setzt es.
+- **Konto-Ausnahmen** (`konto_ausnahmen`: `[{wenn, konto, bezeichnung}]`, Tabelle im Kategorien-Tab): Erst
+  dann kommt eine Zeile „Konto (SKR04): Standard … Ausnahmen: …, wenn …“ in den Prompt (und in den
+  Fingerabdruck). Die KI gibt `konto`, `konto_unsicher`, `konto_grund` aus. `beleg_schema.KONTEN`
+  (`konten_registrieren(kategorien.konten(stand))`) legt fest, welche Konten je Kategorie erlaubt sind;
+  `BelegAnalyse._konto_festlegen` ersetzt alles andere durch das Standardkonto. `konto_unsicher` → Nachfrage
+  (rein fachlich, kein Schiedsrichter); unterschiedliches Konto in den zwei Lesungen → Schiedsrichter.
+  Das Konto ist Prüffeld im Tab „Belege“ und erscheint in Auswertung und Lesequalität.
 - Der **KI-Assistent** (Knopf im Kategorien-Tab) formt aus dem Freitext klare Regeln und stellt Rückfragen –
   nur als Vorschlag im Formular, gespeichert wird erst per „Speichern“.
 - **Prompt-Version** = `PROMPT_VERSION` + `+k` + Fingerabdruck des aktiven Kategorie-Wissens

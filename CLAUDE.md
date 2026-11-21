@@ -39,7 +39,10 @@ Tabs (in `App.py`):
    (Freitext → Regeln + Rückfragen), Probelauf „Hilft meine Änderung?“ mit Beispielbelegen aus Drive.
    Aktive Kategorien fließen in den System-Prompt; Prompt-Version enthält einen Wissens-Hash.
    Jede Kategorie hat ein **SKR04-Konto** für sevDesk (`skr04.py`: Vorlage aus der Papierkram-Kontenliste,
-   frei änderbar/eigene Nummer) – bewusst nicht im Prompt.
+   frei änderbar/eigene Nummer) plus optionale **Konto-Ausnahmen** („wenn … → Konto“, Tabelle). Standardkonto
+   allein steht nicht im Prompt; nur Ausnahmen – dann wählt die KI je Beleg, `BelegAnalyse._konto_festlegen`
+   lässt nur Konten der Kategorie zu (Registrierung `konten_registrieren`), unsicher → Nachfrage. Das Konto
+   ist Prüffeld (`FEEDBACK_FELDER`, Typ `konto`).
 4. **Auswertung** – nur Kennzahlen: Belege/geprüft, Nachfragen, *unnötige* Nachfragen, Trefferquote
    (Belegart, Felder, pro Feld/Belegart, Verwechslungen) und **„Aus Korrekturen lernen“**: großes Modell
    ordnet Korrekturen Ursachen zu und schlägt Ergänzungen für Kategorien vor; Übernahme nur als

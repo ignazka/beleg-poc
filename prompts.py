@@ -7,7 +7,7 @@ Bei JEDER inhaltlichen Änderung an diesem Text PROMPT_VERSION erhöhen. Das Kat
 
 from beleg_schema import STANDARD_KATEGORIEN
 
-PROMPT_VERSION = "2026-11-17.5"
+PROMPT_VERSION = "2026-11-21.1"
 
 _STANDARD_TEXT = "\n".join(f'- "{key}": {label}' for key, label in STANDARD_KATEGORIEN.items())
 
@@ -38,6 +38,15 @@ Beleg ohne Positionen). Dann in kategorie_grund kurz erklären, was dagegen spri
 fehlende_pflichtangaben: Nennt die Beschreibung der gewählten Kategorie Pflichtangaben, prüfe, ob sie auf
 dem Beleg stehen. Liste fehlende kurz auf (z. B. ["Mitarbeitername", "Reiseanlass"]), sonst [].
 Pflichtangaben nie raten oder ergänzen.
+
+KONTO: Nur wenn bei der gewählten Kategorie eine Zeile "Konto (SKR04)" mit Ausnahmen steht.
+- konto: die Kontonummer (nur die Ziffern) der Ausnahme, deren Bedingung auf diesen Beleg zutrifft; trifft
+  keine zu, das Standardkonto. Nur Nummern aus der Zeile der gewählten Kategorie, keine anderen Konten.
+- Entscheide nur nach dem, was auf dem Beleg steht (z. B. Anzahl Gedecke/Personen, Positionen).
+- konto_unsicher: true NUR, wenn der Beleg auf eine Ausnahme hindeutet, sie aber nicht sicher zutrifft.
+  Dann in konto_grund kurz, was dafür und was dagegen spricht. Gibt der Beleg keinen Hinweis auf eine
+  Ausnahme: Standardkonto, konto_unsicher = false.
+- Ohne Zeile "Konto (SKR04)" bei der gewählten Kategorie: konto = null, konto_unsicher = false.
 
 SCHRITT 2 – PRÜFUNGEN
 - lesbar: Ist der Beleg lesbar?
@@ -85,6 +94,9 @@ Antworte AUSSCHLIESSLICH mit einem JSON-Objekt, ohne Markdown, ohne Erklärtext.
   "kategorie_unsicher": false,
   "kategorie_grund": null,
   "fehlende_pflichtangaben": [],
+  "konto": null,
+  "konto_unsicher": false,
+  "konto_grund": null,
   "ausland": false,
   "ec_passt_zur_rechnung": true,
   "lesbar": true,

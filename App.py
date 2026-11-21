@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import streamlit as st
 
 from auth import aktueller_benutzer, darf_kategorien_bearbeiten, login_erzwingen
-from beleg_schema import FEEDBACK_FELDER, KATEGORIEN, STANDARD_KATEGORIEN, BelegAnalyse, parse_datum, kategorien_registrieren, anzeige, normalisieren, werte_gleich, zeitpunkt_de
+from beleg_schema import FEEDBACK_FELDER, KATEGORIEN, STANDARD_KATEGORIEN, BelegAnalyse, parse_datum, kategorien_registrieren, konten_registrieren, anzeige, normalisieren, werte_gleich, zeitpunkt_de
 from datenschutz import ist_datenschutzseite, zeige_datenschutz
 from extraction import MAX_SEITEN, MODEL, MODEL_GROSS, AnalyseFehler, dateien_zu_bildern, text_anfrage_json
 from pipeline import beleg_lesen
@@ -29,7 +29,9 @@ from kategorien import auswahl as kat_auswahl
 from kategorien import schluessel_aus_name as kat_schluessel
 from kategorien import sichtbar as kat_sichtbar
 from kategorien import FELD_LABEL as KAT_FELD_LABEL
-from kategorien import konto_text
+from kategorien import konten as kat_konten
+from kategorien import ausnahmen_aus_tabelle, konto_ausnahmen, konto_text
+import pandas as pd
 import skr04
 from kategorien import LERN_PROMPT, URSACHEN, lern_antwort_pruefen, lern_nachricht
 import lesequalitaet
@@ -92,6 +94,7 @@ except Exception as e:
     st.warning(f"Kategorien konnten nicht geladen werden, es gelten nur die Standard-Kategorien: {e}")
     KAT_STAND = aktueller_stand([])
 kategorien_registrieren(labels(KAT_STAND))
+konten_registrieren(kat_konten(KAT_STAND))
 SYSTEM_PROMPT_AKTUELL = system_prompt(prompt_abschnitt(KAT_STAND))
 PROMPT_VERSION = prompt_version(wissens_hash(KAT_STAND))
 
@@ -99,6 +102,16 @@ PROMPT_VERSION = prompt_version(wissens_hash(KAT_STAND))
 def _kategorie_label(key):
     """Anzeigename einer Belegart – auch für Entwürfe und inzwischen gelöschte Kategorien."""
     return (KAT_STAND.get(key) or {}).get("name") or KATEGORIEN.get(key, key)
+
+
+def _konto_label(nummer: str | None, kategorie: str | None = None) -> str:
+    """'6640' -> '6640 · Bewirtungskosten' (Bezeichnung aus der Kategorie, sonst aus der Vorlage)."""
+    if not nummer:
+        return "noch nicht festgelegt"
+    k = KAT_STAND.get(kategorie) or {}
+    namen = {k.get("skr04_konto"): k.get("skr04_bezeichnung")}
+    namen.update({a["konto"]: a["bezeichnung"] for a in konto_ausnahmen(k)})
+    return skr04.als_text(nummer, namen.get(nummer) or dict(reversed(skr04.VORLAGE)).get(nummer))
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +489,9 @@ def zeige_ergebnis(erg):
         st.markdown(f"**Belegart:** {_kategorie_label(analyse.kategorie)}")
         if analyse.kategorie_unsicher:
             st.markdown(f"**Unsicher, weil:** {analyse.kategorie_grund or 'keine Begründung'}")
+        st.markdown(f"**Konto (SKR04):** {_konto_label(analyse.konto, analyse.kategorie)}")
+        if analyse.konto_unsicher:
+            st.markdown(f"**Konto unsicher, weil:** {analyse.konto_grund or 'keine Begründung'}")
 
         st.markdown("**Prüfungen**")
         st.markdown("\n".join([
@@ -556,7 +572,7 @@ def _felder_auswerten(analyse, korrekturen: dict[str, str]):
         eingabe = korrekturen[key]
         korrekt = normalisieren(typ, eingabe)
         # Eingabe nicht leer, aber nicht lesbar -> Fehler statt stillem Datenverlust
-        if eingabe.strip() and typ in ("betrag", "datum") and korrekt is None:
+        if eingabe.strip() and typ in ("betrag", "datum", "konto") and korrekt is None:
             ungueltig.append(label)
         felder[key] = {
             "modell": modell_wert,
@@ -1449,6 +1465,7 @@ def _kat_feld_init(praefix: str, k: dict) -> None:
         "status": k.get("status", "entwurf"),
         "skr04_konto": k.get("skr04_konto", ""),
         "skr04_bezeichnung": k.get("skr04_bezeichnung", ""),
+        "konto_ausnahmen": [dict(a) for a in k.get("konto_ausnahmen") or []],
     }
     for feld, wert in werte.items():
         st.session_state.setdefault(f"{praefix}_{feld}", wert)
@@ -1618,7 +1635,9 @@ def zeige_kategorien():
 
     with st.expander("Übersicht: SKR04-Konten aller Kategorien"):
         _tabelle([{"Kategorie": v["name"] + ("" if v.get("status") == "aktiv" else " (Entwurf)"),
-                   "SKR04-Konto": konto_text(v) or "noch nicht festgelegt"}
+                   "SKR04-Konto": konto_text(v) or "noch nicht festgelegt",
+                   "Ausnahmen": "; ".join(f"{skr04.als_text(a['konto'], a['bezeichnung'])}, wenn {a['wenn']}"
+                                          for a in konto_ausnahmen(v)) or "–"}
                   for v in sichtbare.values()])
 
 
@@ -1628,7 +1647,7 @@ def _konto_eingabe(praefix: str, darf: bool) -> None:
     st.markdown("**Konto für die Buchung (SKR04)**")
     st.caption("Damit sevDesk den Beleg später richtig einordnet. Die Liste ist nur eine Vorlage – der "
                "Kontenrahmen ist viel größer und ändert sich jährlich. Nummer und Bezeichnung lassen sich "
-               "frei ändern oder ganz eigen eintragen. Für die Erkennung durch die KI spielt das Konto keine Rolle.")
+               "frei ändern oder ganz eigen eintragen. Das Standardkonto setzt das Programm, die KI wählt nur bei Ausnahmen.")
     vorlage = skr04.sortiert()
 
     def uebernehmen():
@@ -1653,6 +1672,34 @@ def _konto_eingabe(praefix: str, darf: bool) -> None:
         elif not (ss.get(f"{praefix}_skr04_konto") or "").strip():
             st.caption(":material/info: Noch kein Konto festgelegt – ohne Konto kann der Beleg später nicht "
                        "automatisch an sevDesk übergeben werden.")
+
+        st.markdown("**Ausnahmen** – wann gehört ein Beleg dieser Kategorie auf ein anderes Konto?")
+        st.caption("Eine Zeile pro Ausnahme. Die KI wählt dann je Beleg zwischen Standardkonto und diesen "
+                   "Ausnahmen und begründet es; deutet der Beleg auf eine Ausnahme hin, ist aber nicht eindeutig, "
+                   "fragt sie nach.")
+        st.info("**Die Bedingung muss auf dem Beleg zu sehen sein.** Die KI kennt nur den Beleg selbst – gut "
+                "sind z. B. „nur ein Gedeck“, „Frühstück auf der Hotelrechnung“, „Shop-Artikel auf dem Tankbon“. "
+                "Was nicht auf dem Beleg steht (wer am Tisch saß, wer gereist ist), kann sie nicht erkennen: Dann "
+                "bleibt es beim Standardkonto, und ihr korrigiert es bei der Prüfung im Tab „Belege“.",
+                icon=":material/visibility:")
+        tabelle = st.data_editor(
+            pd.DataFrame(ss.get(f"{praefix}_konto_ausnahmen") or [], columns=["wenn", "konto", "bezeichnung"]),
+            key=f"{praefix}_konto_ausnahmen_tabelle", num_rows="dynamic", hide_index=True, width="stretch",
+            disabled=not darf,
+            column_config={
+                "wenn": st.column_config.TextColumn("Wenn …", width="large",
+                                                    help="Bedingung, z. B. „nur ein Gedeck / allein auf Reise“"),
+                "konto": st.column_config.TextColumn("Kontonummer", validate=r"^\d{4}$", max_chars=4,
+                                                     help="Vierstellige SKR04-Nummer"),
+                "bezeichnung": st.column_config.TextColumn(
+                    "Bezeichnung (optional)", help="Leer lassen = Bezeichnung aus der Vorlage, falls vorhanden"),
+            },
+        )
+        ss[f"{praefix}_konto_ausnahmen_wert"] = tabelle.to_dict("records")
+        fehler = ausnahmen_aus_tabelle(ss[f"{praefix}_konto_ausnahmen_wert"])[1]
+        if fehler:
+            st.error(fehler)
+
 
 
 def _kategorie_auswahl_setzen(schluessel_neu: str | None) -> None:
@@ -1679,6 +1726,8 @@ def _kategorie_aus_formular(schluessel: str, name: str, praefix: str) -> dict:
         "nachfragen_wenn": ss[f"{praefix}_nachfragen_wenn"].strip(),
         "skr04_konto": (ss.get(f"{praefix}_skr04_konto") or "").strip(),
         "skr04_bezeichnung": (ss.get(f"{praefix}_skr04_bezeichnung") or "").strip(),
+        "konto_ausnahmen": ausnahmen_aus_tabelle(ss.get(f"{praefix}_konto_ausnahmen_wert",
+                                                         ss.get(f"{praefix}_konto_ausnahmen") or []))[0],
     }
 
 
@@ -1865,7 +1914,9 @@ def _kategorie_sichern(wahl: str, k: dict, praefix: str, loeschen: bool = False)
     if not name:
         st.error("Bitte einen Namen eingeben.")
         return
-    konto_fehler = None if loeschen else skr04.nummer_pruefen(ss.get(f"{praefix}_skr04_konto", ""))
+    konto_fehler = None if loeschen else (
+        skr04.nummer_pruefen(ss.get(f"{praefix}_skr04_konto", ""))
+        or ausnahmen_aus_tabelle(ss.get(f"{praefix}_konto_ausnahmen_wert", []))[1])
     if konto_fehler:
         st.error(f"Nicht gespeichert: {konto_fehler}")
         return

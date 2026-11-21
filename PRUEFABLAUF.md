@@ -56,6 +56,9 @@ voneinander unabhängiger. Ein „3“ statt „8“ passiert dann selten zweima
   so wie gedruckt
 - **Trinkgeld**: nur, wenn es auf dem Beleg steht. Nie aus einer Differenz berechnet.
 - Ausland ja/nein und ob der EC-Beleg zur Rechnung passt (Datum, Uhrzeit, Adresse, Name)
+- **Konto** (SKR04), nur wenn die Kategorie Konto-Ausnahmen hat: Standardkonto oder die zutreffende Ausnahme,
+  bei Hinweisen ohne Gewissheit `konto_unsicher` + Begründung. Andere Konten als die der Kategorie ersetzt der
+  Code durch das Standardkonto; ohne Ausnahmen setzt der Code immer das Standardkonto.
 
 Die KI bildet **keine Summen und keine Differenzen**. Das war die Ursache der ersten Fehler: Beim
 Domhof-Beleg hatte sie die MwSt. falsch addiert (11,40 statt 11,35 €) und daraus einen falschen
@@ -141,7 +144,8 @@ Der Schiedsrichter liest, wenn
 **Ausnahme – rein fachliche Gründe** (`checks.nur_fachliche_gruende`): Stimmen beide Lesungen überein und
 lassen sich **alle** Nachfragegründe durch genaueres Lesen nicht ändern, liest der Schiedsrichter nicht –
 das spart Zeit und Kosten. Die Nachfrage an den Menschen bleibt. Rein fachlich sind: Auslandsbeleg, nur
-EC-Beleg (Rechnung fehlt), ungewöhnlicher Steuersatz (beide Lesungen sehen denselben Satz). Alles andere –
+EC-Beleg (Rechnung fehlt), ungewöhnlicher Steuersatz (beide Lesungen sehen denselben Satz), Konto unsicher.
+Alles andere –
 Rechenprüfung, unsichere oder unbekannte Belegart, fehlende Pflichtangaben, EC passt nicht, unlesbar, kein
 Steuersatz/Datum/Betrag – geht im Zweifel weiter an den Schiedsrichter.
 
@@ -166,6 +170,7 @@ Gründe:
 - Belegart unsicher (mit Begründung der KI) oder keiner Kategorie zuzuordnen
 - nur EC-Beleg, keine Rechnung
 - **Auslandsbeleg** (abweichende Handhabe laut Buchhaltung)
+- **Konto unsicher** (Beleg deutet auf eine Konto-Ausnahme der Kategorie hin, aber nicht sicher)
 - EC-Beleg passt nicht zur Rechnung (Datum, Uhrzeit, Adresse, Name)
 - kein Steuersatz ausgewiesen, oder ein anderer als 7 % / 19 %
 - Gesamtbetrag oder Datum fehlt

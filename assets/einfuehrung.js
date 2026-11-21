@@ -48,7 +48,8 @@
             "Kollegen erklären würdet." },
     { tab: 2, ziel: () => ersterSichtbarer(".st-key-kategorie_konto"), titel: "Konto für sevDesk",
       text: "Jede Kategorie bekommt ein SKR04-Konto, damit sevDesk den Beleg später richtig bucht. Aus der " +
-            "Vorlage übernehmen oder Nummer und Bezeichnung selbst eintragen." },
+            "Vorlage übernehmen oder selbst eintragen. Gehören manche Belege auf ein anderes Konto, tragt darunter " +
+            "Ausnahmen ein („Wenn nur ein Gedeck → 6664“) – dann wählt die KI je Beleg und fragt im Zweifel nach." },
     { tab: 2, ziel: () => knopfMitText("Testen"), titel: "Erst testen, dann speichern",
       text: "Der Probelauf liest Beispielbelege einmal mit der alten und einmal mit der neuen Beschreibung. So " +
             "siehst du <i>vor</i> dem Speichern, ob deine Änderung die Erkennung verbessert." },
