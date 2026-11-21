@@ -29,6 +29,8 @@ from kategorien import auswahl as kat_auswahl
 from kategorien import schluessel_aus_name as kat_schluessel
 from kategorien import sichtbar as kat_sichtbar
 from kategorien import FELD_LABEL as KAT_FELD_LABEL
+from kategorien import konto_text
+import skr04
 from kategorien import LERN_PROMPT, URSACHEN, lern_antwort_pruefen, lern_nachricht
 import lesequalitaet
 from prompts import prompt_version, system_prompt
@@ -1445,6 +1447,8 @@ def _kat_feld_init(praefix: str, k: dict) -> None:
         else (k.get("pflichtangaben") or ""),
         "nachfragen_wenn": k.get("nachfragen_wenn", ""),
         "status": k.get("status", "entwurf"),
+        "skr04_konto": k.get("skr04_konto", ""),
+        "skr04_bezeichnung": k.get("skr04_bezeichnung", ""),
     }
     for feld, wert in werte.items():
         st.session_state.setdefault(f"{praefix}_{feld}", wert)
@@ -1560,6 +1564,7 @@ def zeige_kategorien():
     st.text_area("Pflichtangaben auf dem Beleg (eine pro Zeile)", key=f"{praefix}_pflichtangaben",
                  disabled=not darf, help="Fehlt eine davon auf dem Beleg, geht er zur Nachfrage.")
     st.text_area("Wann muss nachgefragt werden?", key=f"{praefix}_nachfragen_wenn", disabled=not darf)
+    _konto_eingabe(praefix, darf)
     if not standard:
         st.radio("Status", list(_KAT_STATUS), format_func=_KAT_STATUS.get, key=f"{praefix}_status",
                  horizontal=True, disabled=not darf)
@@ -1599,6 +1604,7 @@ def zeige_kategorien():
                 _tabelle([{
                     "Version": v.get("version"), "Zeitpunkt": zeitpunkt_de(v.get("zeitpunkt")),
                     "Von": v.get("bearbeiter") or "–", "Status": v.get("status"),
+                    "SKR04-Konto": konto_text(v) or "–",
                     "Beschreibung": (v.get("beschreibung") or "")[:120],
                 } for v in reversed(verlauf)])
             else:
@@ -1609,6 +1615,44 @@ def zeige_kategorien():
     if ergebnis:
         with st.expander("Letzter Probelauf", expanded=True):
             _zeige_testergebnis(ergebnis)
+
+    with st.expander("Übersicht: SKR04-Konten aller Kategorien"):
+        _tabelle([{"Kategorie": v["name"] + ("" if v.get("status") == "aktiv" else " (Entwurf)"),
+                   "SKR04-Konto": konto_text(v) or "noch nicht festgelegt"}
+                  for v in sichtbare.values()])
+
+
+def _konto_eingabe(praefix: str, darf: bool) -> None:
+    """SKR04-Konto der Kategorie: aus der Vorlage übernehmen (füllt beide Felder vor) oder frei eintragen."""
+    ss = st.session_state
+    st.markdown("**Konto für die Buchung (SKR04)**")
+    st.caption("Damit sevDesk den Beleg später richtig einordnet. Die Liste ist nur eine Vorlage – der "
+               "Kontenrahmen ist viel größer und ändert sich jährlich. Nummer und Bezeichnung lassen sich "
+               "frei ändern oder ganz eigen eintragen. Für die Erkennung durch die KI spielt das Konto keine Rolle.")
+    vorlage = skr04.sortiert()
+
+    def uebernehmen():
+        wahl = ss.get(f"{praefix}_konto_vorlage")
+        if wahl is not None:
+            ss[f"{praefix}_skr04_konto"], ss[f"{praefix}_skr04_bezeichnung"] = vorlage[wahl]
+            ss[f"{praefix}_konto_vorlage"] = None  # Liste wieder leer, die Felder darunter zählen
+
+    with st.container(key="kategorie_konto"):
+        st.selectbox(
+            "Aus der Vorlage übernehmen", range(len(vorlage)), index=None, key=f"{praefix}_konto_vorlage",
+            format_func=lambda i: skr04.als_text(*vorlage[i]), on_change=uebernehmen, disabled=not darf,
+            placeholder="Konto suchen, z. B. „Bewirtung“ oder „6640“ …", help=skr04.QUELLE,
+        )
+        spalte_nr, spalte_text = st.columns([1, 3])
+        spalte_nr.text_input("Kontonummer", key=f"{praefix}_skr04_konto", disabled=not darf, max_chars=4,
+                             placeholder="z. B. 6640")
+        spalte_text.text_input("Bezeichnung (optional)", key=f"{praefix}_skr04_bezeichnung", disabled=not darf)
+        fehler = skr04.nummer_pruefen(ss.get(f"{praefix}_skr04_konto", ""))
+        if fehler:
+            st.error(fehler)
+        elif not (ss.get(f"{praefix}_skr04_konto") or "").strip():
+            st.caption(":material/info: Noch kein Konto festgelegt – ohne Konto kann der Beleg später nicht "
+                       "automatisch an sevDesk übergeben werden.")
 
 
 def _kategorie_auswahl_setzen(schluessel_neu: str | None) -> None:
@@ -1633,6 +1677,8 @@ def _kategorie_aus_formular(schluessel: str, name: str, praefix: str) -> dict:
         "abgrenzung": ss[f"{praefix}_abgrenzung"].strip(),
         "pflichtangaben": [z.strip() for z in ss[f"{praefix}_pflichtangaben"].splitlines() if z.strip()],
         "nachfragen_wenn": ss[f"{praefix}_nachfragen_wenn"].strip(),
+        "skr04_konto": (ss.get(f"{praefix}_skr04_konto") or "").strip(),
+        "skr04_bezeichnung": (ss.get(f"{praefix}_skr04_bezeichnung") or "").strip(),
     }
 
 
@@ -1818,6 +1864,10 @@ def _kategorie_sichern(wahl: str, k: dict, praefix: str, loeschen: bool = False)
     name = (k["name"] if k.get("standard") else ss[f"{praefix}_name"]).strip()
     if not name:
         st.error("Bitte einen Namen eingeben.")
+        return
+    konto_fehler = None if loeschen else skr04.nummer_pruefen(ss.get(f"{praefix}_skr04_konto", ""))
+    if konto_fehler:
+        st.error(f"Nicht gespeichert: {konto_fehler}")
         return
     schluessel = wahl
     if wahl == _NEU:

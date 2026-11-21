@@ -46,6 +46,9 @@
       text: "Hier legt ihr fest, welche Belegarten die KI kennt und woran sie sie erkennt. Oben eine Kategorie " +
             "auswählen, daneben über „Neue Kategorie“ eine neue anlegen. Beschreibt sie so, wie ihr es einem neuen " +
             "Kollegen erklären würdet." },
+    { tab: 2, ziel: () => ersterSichtbarer(".st-key-kategorie_konto"), titel: "Konto für sevDesk",
+      text: "Jede Kategorie bekommt ein SKR04-Konto, damit sevDesk den Beleg später richtig bucht. Aus der " +
+            "Vorlage übernehmen oder Nummer und Bezeichnung selbst eintragen." },
     { tab: 2, ziel: () => knopfMitText("Testen"), titel: "Erst testen, dann speichern",
       text: "Der Probelauf liest Beispielbelege einmal mit der alten und einmal mit der neuen Beschreibung. So " +
             "siehst du <i>vor</i> dem Speichern, ob deine Änderung die Erkennung verbessert." },

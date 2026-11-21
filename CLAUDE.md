@@ -38,6 +38,8 @@ Tabs (in `App.py`):
 3. **Kategorien** – Belegarten anlegen/bearbeiten/löschen (Versionen, Entwurf/aktiv), KI-Assistent
    (Freitext → Regeln + Rückfragen), Probelauf „Hilft meine Änderung?“ mit Beispielbelegen aus Drive.
    Aktive Kategorien fließen in den System-Prompt; Prompt-Version enthält einen Wissens-Hash.
+   Jede Kategorie hat ein **SKR04-Konto** für sevDesk (`skr04.py`: Vorlage aus der Papierkram-Kontenliste,
+   frei änderbar/eigene Nummer) – bewusst nicht im Prompt.
 4. **Auswertung** – nur Kennzahlen: Belege/geprüft, Nachfragen, *unnötige* Nachfragen, Trefferquote
    (Belegart, Felder, pro Feld/Belegart, Verwechslungen) und **„Aus Korrekturen lernen“**: großes Modell
    ordnet Korrekturen Ursachen zu und schlägt Ergänzungen für Kategorien vor; Übernahme nur als

@@ -130,6 +130,10 @@ Menschen pflegen, und über **Messung**:
   Version mit Status `geloescht`). `kategorien.aktueller_stand` nimmt pro Schlüssel die jüngste Version.
 - `kategorien.prompt_abschnitt` setzt **nur aktive** Kategorien mit all ihren Regeln in die Prompt-Vorlage
   (`prompts.system_prompt`) ein. Das passiert bei jedem Seitenaufruf → Änderungen wirken sofort für alle.
+- **SKR04-Konto** je Kategorie (`skr04_konto` 4-stellig, `skr04_bezeichnung` optional): aus der Vorlage in
+  `skr04.py` übernehmen oder frei eintragen. Gedacht für die Buchung in sevDesk, deshalb **nicht** im Prompt
+  und nicht im Wissens-Fingerabdruck; steht im lesbaren Google-Doc und im Versionsverlauf. Ohne Konto wird
+  trotzdem gespeichert (nur Hinweis), eine falsche Nummer verhindert das Speichern.
 - Der **KI-Assistent** (Knopf im Kategorien-Tab) formt aus dem Freitext klare Regeln und stellt Rückfragen –
   nur als Vorschlag im Formular, gespeichert wird erst per „Speichern“.
 - **Prompt-Version** = `PROMPT_VERSION` + `+k` + Fingerabdruck des aktiven Kategorie-Wissens

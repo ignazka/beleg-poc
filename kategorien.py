@@ -14,6 +14,7 @@ import json
 import re
 import unicodedata
 
+import skr04
 from beleg_schema import STANDARD_KATEGORIEN
 
 # Beschreibungen der Standard-Kategorien, solange niemand sie in der App ergänzt hat
@@ -117,10 +118,20 @@ def wissens_hash(stand: dict[str, dict]) -> str:
     return hashlib.sha256(roh.encode()).hexdigest()[:6]
 
 
+def konto_text(k: dict) -> str:
+    """SKR04-Konto der Kategorie als '6640 · Bewirtungskosten' (leer, wenn keins festgelegt).
+
+    Das Konto ist für die spätere Buchung in sevDesk gedacht, nicht für die Erkennung – es steht deshalb
+    nicht im Prompt und ändert die Prompt-Version nicht.
+    """
+    return skr04.als_text(k.get("skr04_konto"), k.get("skr04_bezeichnung"))
+
+
 def als_dokument(k: dict) -> str:
     """Lesbarer Text für das Google-Doc im Drive-Ordner der Kategorie."""
     teile = [k["name"], "", f"Schlüssel: {k['schluessel']} · Status: {k.get('status')} · "
-             f"Version {k.get('version')} · zuletzt geändert von {k.get('bearbeiter') or '–'}", ""]
+             f"Version {k.get('version')} · zuletzt geändert von {k.get('bearbeiter') or '–'}",
+             f"SKR04-Konto: {konto_text(k) or 'noch nicht festgelegt'}", ""]
     for feld in FELDER:
         text = _als_text(k.get(feld))
         if text:
