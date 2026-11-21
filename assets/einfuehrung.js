@@ -40,16 +40,22 @@
                     return zeile ? zeile.children[1] : null; },
       titel: "Prüfen und korrigieren",
       text: "Stimmt die Belegart? Dann „Ja“, sonst die richtige auswählen. Falsch gelesene Werte einfach " +
-            "überschreiben und kurz begründen – aus diesen Begründungen lernt die KI. Auch schon geprüfte Belege " +
+            "überschreiben und kurz begründen – aus diesen Begründungen lernt die KI. Dazu gehört auch das " +
+            "Konto (SKR04): Stimmt es nicht, die richtige Nummer eintragen. Auch schon geprüfte Belege " +
             "lassen sich jederzeit über „Korrigieren“ ändern." },
     { tab: 2, ziel: () => ersterSichtbarer(".st-key-kategorie_wahl"), titel: "Belegarten",
       text: "Hier legt ihr fest, welche Belegarten die KI kennt und woran sie sie erkennt. Oben eine Kategorie " +
             "auswählen, daneben über „Neue Kategorie“ eine neue anlegen. Beschreibt sie so, wie ihr es einem neuen " +
             "Kollegen erklären würdet." },
     { tab: 2, ziel: () => ersterSichtbarer(".st-key-kategorie_konto"), titel: "Konto für sevDesk",
-      text: "Jede Kategorie bekommt ein SKR04-Konto, damit sevDesk den Beleg später richtig bucht. Aus der " +
-            "Vorlage übernehmen oder selbst eintragen. Gehören manche Belege auf ein anderes Konto, tragt darunter " +
-            "Ausnahmen ein („Wenn nur ein Gedeck → 6664“) – dann wählt die KI je Beleg und fragt im Zweifel nach." },
+      text: "Jede Kategorie bekommt ein SKR04-Konto, damit sevDesk den Beleg später richtig bucht. In der Liste " +
+            "nach Nummer oder Stichwort suchen – das füllt Nummer und Bezeichnung aus. Beides lässt sich ändern " +
+            "oder ganz selbst eintragen, denn der Kontenrahmen ist viel größer als die Vorlage." },
+    { tab: 2, ziel: () => ersterSichtbarer(".st-key-kategorie_konto_ausnahmen"), titel: "Ausnahmen beim Konto",
+      text: "Gehören manche Belege dieser Kategorie auf ein anderes Konto, tragt hier eine Zeile ein, z. B. " +
+            "„Wenn nur ein Gedeck → 6664“. Die KI wählt dann je Beleg zwischen Standardkonto und Ausnahmen und " +
+            "fragt im Zweifel nach. Wichtig: Die Bedingung muss <b>auf dem Beleg zu sehen</b> sein – sonst bleibt " +
+            "es beim Standardkonto und ihr korrigiert es bei der Prüfung." },
     { tab: 2, ziel: () => knopfMitText("Testen"), titel: "Erst testen, dann speichern",
       text: "Der Probelauf liest Beispielbelege einmal mit der alten und einmal mit der neuen Beschreibung. So " +
             "siehst du <i>vor</i> dem Speichern, ob deine Änderung die Erkennung verbessert." },

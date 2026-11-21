@@ -1673,6 +1673,7 @@ def _konto_eingabe(praefix: str, darf: bool) -> None:
             st.caption(":material/info: Noch kein Konto festgelegt – ohne Konto kann der Beleg später nicht "
                        "automatisch an sevDesk übergeben werden.")
 
+    with st.container(key="kategorie_konto_ausnahmen"):
         st.markdown("**Ausnahmen** – wann gehört ein Beleg dieser Kategorie auf ein anderes Konto?")
         st.caption("Eine Zeile pro Ausnahme. Die KI wählt dann je Beleg zwischen Standardkonto und diesen "
                    "Ausnahmen und begründet es; deutet der Beleg auf eine Ausnahme hin, ist aber nicht eindeutig, "
