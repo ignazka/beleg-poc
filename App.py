@@ -18,7 +18,7 @@ from extraction import MAX_SEITEN, MODEL, MODEL_GROSS, AnalyseFehler, dateien_zu
 from pipeline import beleg_lesen
 from testlauf import MAX_BELEGE as MAX_TESTBELEGE
 from testlauf import ausfuehren as testlauf_ausfuehren
-from testlauf import erwartete_kategorien
+from testlauf import erwartete_kategorien, konten_vereinigen
 from testlauf import zusammenfassung as testlauf_zusammenfassung
 from marke import APP_NAME, kopfzeile
 from einfuehrung import belegansicht_einbetten, einfuehrung_ausfuehren, einfuehrung_knopf
@@ -1810,20 +1810,26 @@ def _zeige_testlauf(wahl: str, k: dict, praefix: str) -> None:
             varianten = {"nachher": nachher}  # nichts geändert -> nur ein Durchlauf
         auswahl = belege[:MAX_TESTBELEGE]
         kategorien_registrieren({**labels(KAT_STAND), schluessel: name})  # neue Kategorie für den Test gültig
+        # Konto-Regeln: jede Variante nach ihren eigenen (auch noch nicht gespeicherte Ausnahmen)
+        konten = {"vorher": kat_konten(KAT_STAND), "nachher": kat_konten(entwurf)}
+        konten_registrieren(konten_vereinigen(*konten.values()))
         balken = st.progress(0.0, text="Probelauf läuft …")
         try:
             daten = [(b["name"], beispielbeleg_laden(b["ref"]), b["mime"]) for b in auswahl]
             ergebnisse = testlauf_ausfuehren(
                 daten, varianten,
                 fortschritt=lambda f, g: balken.progress(f / g, text=f"Probelauf: {f} von {g} Lesungen fertig"),
+                konten=konten,
             )
         except Exception as e:
             st.session_state["meldung_probelauf"] = f"Probelauf fehlgeschlagen: {e}"
         else:
             st.session_state[f"testlauf_{wahl}"] = {"ergebnisse": ergebnisse, "varianten": list(varianten),
-                                                    "erwartet": erwartete_kategorien(schluessel), "name": name}
+                                                    "erwartet": erwartete_kategorien(schluessel), "name": name,
+                                                    "schluessel": schluessel}
         finally:
             kategorien_registrieren(labels(KAT_STAND))
+            konten_registrieren(kat_konten(KAT_STAND))
         st.rerun(scope="fragment")  # Knopf wieder normal, Ergebnis anzeigen – Fenster bleibt offen
 
     ergebnis = st.session_state.get(f"testlauf_{wahl}")
@@ -1874,13 +1880,16 @@ def _zeige_testergebnis(t: dict) -> None:
             f"- Richtig als „{t['name']}“ erkannt: **{z['erkannt']} von {z['belege']}**\n"
             f"- Müssten nachgefragt werden: **{z['nachfragen']} von {z['belege']}**"
             + (f"\n- Konnten nicht gelesen werden: **{z['fehler']}**" if z["fehler"] else "")
+            + ("\n- Konten: " + ", ".join(f"{_konto_label(nr, t.get('schluessel'))} ({n}×)"
+                                         for nr, n in sorted(z["konten"].items())) if z.get("konten") else "")
         )
     if len(varianten) == 2:
         art, text = _testlauf_fazit(zahlen["vorher"], zahlen["nachher"])
         getattr(st, art)(text, icon={"success": ":material/thumb_up:", "warning": ":material/thumb_down:",
                                      "info": ":material/drag_handle:"}[art])
     st.caption("Grün = KI ist sicher, rot = müsste nachgefragt werden, grau = Datei nicht lesbar. "
-               "✓ = als diese Kategorie erkannt, ✗ = als andere Kategorie erkannt.")
+               "✓ = als diese Kategorie erkannt, ✗ = als andere Kategorie erkannt. "
+               "Konto mit „?“ = die KI ist beim Konto unsicher.")
 
     def zelle(e) -> str:
         if e is None:
@@ -1888,7 +1897,8 @@ def _zeige_testergebnis(t: dict) -> None:
         if e.fehler:
             return f"Fehler: {e.fehler[:60]}"
         treffer = "✓" if e.kategorie in erwartet else "✗"
-        return (f"{treffer} {_kategorie_label(e.kategorie)} · {e.betrag} · "
+        konto = f" · Konto {e.konto}{'?' if e.konto_unsicher else ''}" if getattr(e, "konto", None) else ""
+        return (f"{treffer} {_kategorie_label(e.kategorie)} · {e.betrag}{konto} · "
                 f"{'Nachfrage' if e.nachfrage else 'ok'}")
 
     zeilen = []
@@ -1898,7 +1908,8 @@ def _zeige_testergebnis(t: dict) -> None:
             zeile[_VARIANTE_TITEL[v]] = zelle(je_variante.get(v))
         if len(varianten) == 2:
             a, b = je_variante.get("vorher"), je_variante.get("nachher")
-            geaendert = a and b and (a.kategorie != b.kategorie or a.nachfrage != b.nachfrage)
+            geaendert = a and b and (a.kategorie != b.kategorie or a.nachfrage != b.nachfrage
+                                     or getattr(a, "konto", None) != getattr(b, "konto", None))
             zeile["Unterschied"] = "anders" if geaendert else "–"
         zeilen.append(zeile)
     _farbtabelle(zeilen, [_VARIANTE_TITEL[v] for v in varianten])

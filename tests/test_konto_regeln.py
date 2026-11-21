@@ -89,3 +89,28 @@ def test_ausnahmen_aus_tabelle():
     assert ausnahmen_aus_tabelle([{"wenn": "x", "konto": "6664"}])[0][0]["bezeichnung"].startswith("Reisekosten")
     _, fehler = ausnahmen_aus_tabelle([{"wenn": "", "konto": "6664"}, {"wenn": "x", "konto": "66"}])
     assert "Zeile 1" in fehler and "Zeile 2" in fehler
+
+
+# --- Probelauf: Konto je Variante -----------------------------------------------------------------------
+
+def test_probelauf_waehlt_konto_je_variante(monkeypatch):
+    import pipeline
+    import testlauf
+
+    vorher = konten(_stand())            # nur Standardkonto
+    nachher = konten(_stand(AUSNAHMEN))  # neue, noch nicht gespeicherte Ausnahme 6664
+    konten_registrieren(testlauf.konten_vereinigen(vorher, nachher))
+    assert KONTEN["restaurant_beleg"] == {"standard": None, "ausnahmen": ["6130", "6640", "6664"]}
+
+    def lesen(*_a, **_k):  # die KI wählt in beiden Läufen die Ausnahme und ist unsicher
+        a = BelegAnalyse.model_validate({"kategorie": "restaurant_beleg", "konto": "6664", "konto_unsicher": True,
+                                         "konto_grund": "1 Gericht"})
+        return pipeline.LeseErgebnis(a, "{}", "m", [], gruende=["Konto unsicher: 1 Gericht"])
+    monkeypatch.setattr(testlauf, "beleg_lesen", lesen)
+    monkeypatch.setattr(testlauf, "dateien_zu_bildern", lambda d: ([b""], 1, 1))
+
+    erg = testlauf.ausfuehren([("a.png", b"", "image/png")], {"vorher": "p1", "nachher": "p2"},
+                              konten={"vorher": vorher, "nachher": nachher})["a.png"]
+    assert (erg["vorher"].konto, erg["vorher"].konto_unsicher, erg["vorher"].nachfrage) == ("6640", False, False)
+    assert (erg["nachher"].konto, erg["nachher"].konto_unsicher, erg["nachher"].nachfrage) == ("6664", True, True)
+    assert testlauf.zusammenfassung({"a.png": erg}, "nachher", {"restaurant_beleg"})["konten"] == {"6664": 1}

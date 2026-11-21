@@ -273,8 +273,10 @@ lauf = {
     "b.pdf": {"vorher": Ergebnis("parken", True, ["y"], "–", "–"),
               "nachher": Ergebnis(None, True, [], "", "", "Timeout")},
 }
-assert zusammenfassung(lauf, "vorher", {"parken"}) == {"belege": 2, "erkannt": 1, "nachfragen": 2, "fehler": 0}
-assert zusammenfassung(lauf, "nachher", {"parken"}) == {"belege": 2, "erkannt": 1, "nachfragen": 1, "fehler": 1}
+assert zusammenfassung(lauf, "vorher", {"parken"}) == {"belege": 2, "erkannt": 1, "nachfragen": 2, "fehler": 0,
+                                                    "konten": {}}
+assert zusammenfassung(lauf, "nachher", {"parken"}) == {"belege": 2, "erkannt": 1, "nachfragen": 1, "fehler": 1,
+                                                     "konten": {}}
 
 # Profilbild in der Seitenleiste (Google-Avatar, sonst Initialen; Namen werden HTML-sicher eingesetzt)
 from auth import benutzer_karte  # noqa: E402

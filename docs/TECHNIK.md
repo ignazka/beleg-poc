@@ -151,6 +151,9 @@ Menschen pflegen, und über **Messung**:
 `testlauf.py`: Beispielbelege aus `Anlage KI Assistent/<Ordner>/` werden einmal mit dem gespeicherten und
 einmal mit dem geänderten (noch ungespeicherten) Wissen komplett analysiert; Ergebnis: wie oft die Kategorie
 erkannt wurde, wie viele Nachfragen, ein Fazit („Die Änderung hilft“ …). Es wird nichts gespeichert.
+Dazu das **Konto** je Beleg und Variante: Während des Laufs erlaubt `konten_vereinigen` alle Konten beider
+Varianten, danach wertet `beleg_schema.konto_waehlen` jede Lesung nach den Konto-Regeln ihrer Variante aus –
+so wirken auch noch nicht gespeicherte Ausnahmen. Ein anderes Konto zählt in der Spalte „Unterschied“.
 
 ### 5.3 Messen (Tab „Auswertung“)
 

@@ -42,6 +42,16 @@ def konten_registrieren(konten: dict[str, dict]) -> None:
     KONTEN.update(konten)
 
 
+def konto_waehlen(konten: dict | None, ki_konto: str | None, unsicher: bool) -> tuple[str | None, bool]:
+    """Konto der KI nur übernehmen, wenn es eines der Konten der Kategorie ist; sonst Standardkonto.
+    Ohne Ausnahmen entscheidet die KI nichts -> immer Standardkonto, nie „unsicher“.
+    konten = {"standard": "6640" | None, "ausnahmen": [...]} (eine Kategorie aus KONTEN)."""
+    konten = konten or {}
+    erlaubt = {k for k in [konten.get("standard"), *(konten.get("ausnahmen") or [])] if k}
+    return (ki_konto if ki_konto in erlaubt else konten.get("standard"),
+            bool(unsicher and konten.get("ausnahmen")))
+
+
 BEWIRTUNG_KATEGORIEN = {"restaurant_beleg", "restaurant_mit_ec_beleg", "nur_ec_beleg", "bewirtungsbeleg_intern"}
 
 # Felder, die im Feedback einzeln bewertet/korrigiert werden: (key, Label, Typ)
@@ -397,14 +407,9 @@ class BelegAnalyse(BaseModel):
         return self
 
     def _konto_festlegen(self) -> None:
-        """Konto der KI nur übernehmen, wenn es eines der Konten der Kategorie ist; sonst Standardkonto.
-        Ohne Ausnahmen entscheidet die KI nichts -> immer Standardkonto, nie „unsicher“."""
-        konten = KONTEN.get(self.kategorie) or {}
-        erlaubt = {k for k in [konten.get("standard"), *(konten.get("ausnahmen") or [])] if k}
-        if not konten.get("ausnahmen"):
-            self.konto_unsicher, self.konto_grund = False, None
-        if self.konto not in erlaubt:
-            self.konto = konten.get("standard")
+        self.konto, self.konto_unsicher = konto_waehlen(KONTEN.get(self.kategorie), self.konto, self.konto_unsicher)
+        if not (KONTEN.get(self.kategorie) or {}).get("ausnahmen"):
+            self.konto_grund = None  # ohne Ausnahmen hat die KI nichts zu begründen
 
     @staticmethod
     def _zeilen_summe(zeilen) -> float | None:

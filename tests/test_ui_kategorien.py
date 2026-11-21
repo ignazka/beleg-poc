@@ -135,3 +135,21 @@ def test_konto_im_ergebnis_und_im_pruefformular():
     A.knopf(at, "Prüfung speichern").click().run()
     A.keine_fehler(at)
     assert A.SPEICHER["feedback"][-1]["felder"]["konto"] == {"modell": "6664", "korrekt": "6640", "richtig": False}
+
+
+def test_probelauf_zeigt_konto():
+    from testlauf import Ergebnis
+    at = A.app(kategorien=[_kategorie_mit_ausnahmen()])
+    at.selectbox(key="kategorie_wahl").set_value("restaurant_beleg").run()
+    at.session_state["testlauf_restaurant_beleg"] = {
+        "ergebnisse": {"a.png": {"vorher": Ergebnis("restaurant_beleg", False, [], "20,00 €", "–", konto="6640"),
+                                 "nachher": Ergebnis("restaurant_beleg", True, ["Konto unsicher: 1 Gericht"],
+                                                     "20,00 €", "–", konto="6664", konto_unsicher=True)}},
+        "varianten": ["vorher", "nachher"], "erwartet": {"restaurant_beleg"}, "name": "Restaurant",
+        "schluessel": "restaurant_beleg"}
+    at.run()
+    A.keine_fehler(at)
+    assert any("Konten: 6664 · Verpflegung (1×)" in m.value for m in at.markdown)
+    zellen = _zellen(at)
+    assert any("Konto 6640 · ok" in z for z in zellen) and any("Konto 6664? · Nachfrage" in z for z in zellen)
+    assert "anders" in zellen
